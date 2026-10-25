@@ -1,8 +1,8 @@
 # Subcurrent app prototype
 
-Live after deploy: https://subcurrent-app-prototype.vercel.app (Vercel) and https://thedude0007.github.io/subcurrent-app-prototype/ (GitHub Pages mirror)
+Live: https://subcurrent-prototype-v2.vercel.app (app) and https://subcurrent-prototype-v2.vercel.app/api/health (backend)
 
-A clickable prototype of a Subcurrent fan app and owner portal. It opens on the first show: **Re:Turnal Nights**, Downright & Subcurrent, October 23–24, 2026, Denver, sound by VOID. It is one static page in `docs/` with no build step.
+A clickable prototype of a Subcurrent fan app and owner portal. It opens on the first show: **Re:Turnal Nights**, Downright & Subcurrent, October 23–24, 2026, Denver, sound by VOID. The front end is one static page in `docs/` with no build step; the backend (Express + Prisma on Neon Postgres) runs in the same Vercel project as a serverless function at `/api`.
 
 ## Three views
 
@@ -24,19 +24,27 @@ A clickable prototype of a Subcurrent fan app and owner portal. It opens on the 
 - Real: the Subcurrent logo, the Re:Turnal Nights flyer and lineup (Bluetech, Flintwick, Ovoid, Rhizomorphic, YOKO, Brickwife, Goosebumpz, Somatoast, Vinja, secret guests), the dates, VOID as the sound partner, and the SoundCloud pages for Bluetech, Flintwick, Ovoid, Rhizomorphic, Goosebumpz, Somatoast and Vinja.
 - Demo: set times, doors, prices, past nights, Hallow Current and Undertow Afters, fans, sales and every money figure.
 - Generic: Phase 1 checkout points at a "ticket partner" because Subcurrent's ticketing platform isn't confirmed. Swap in the real one (and its event links) once known.
-- Simulated: payments, texts, AI flyer reading and the ticket sync.
+- Live backend: accounts, tickets and check-in, the feed, DMs, push notifications, crew pings and chat, the door headcount with its capacity hold, Broadcast to the app, ticket transfers and the night recap. `docs/connect.js` wires the app's buttons to it.
+- Each third-party integration turns on when its keys are set and stays simulated until then. `/api/health` shows which are live:
 
-## Go live (GitHub + Vercel) in one command
+| Integration | Env vars | Without keys |
+|---|---|---|
+| Payments (Stripe) | `STRIPE_SECRET_KEY` (test key, `sk_test_`) | Orders are marked paid |
+| Flyer AI + recap summary (Anthropic) | `ANTHROPIC_API_KEY`, optional `ANTHROPIC_MODEL` | Sample flyer fields, template recap |
+| SMS (Twilio) | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` | Logged, not sent |
+| Facebook / Instagram | `META_PAGE_ID`, `META_PAGE_TOKEN`, `IG_USER_ID` | Recorded as not connected |
+| X | `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET` | Recorded as not connected |
 
-You need git and the [GitHub CLI](https://cli.github.com), logged in with `gh auth login`, plus Node 18+ for the Vercel CLI (the script logs you in to Vercel on first run).
+Server-side checkout uses Stripe's test card, so only test keys work. Live card payments need a card form (Stripe Checkout).
+
+## Deploy
 
 ```bash
-./ship.sh
+./ship-v2.sh     # first-time setup: GitHub repo, Vercel project, Neon DB, secrets, schema + seed, deploy
+./set-keys.sh    # enter integration keys (hidden input), then redeploy
 ```
 
-## Update the site
-
-Replace `docs/index.html` and push to `main`. GitHub Pages republishes in about a minute.
+After setup, every push to `main` redeploys. Backend tests: `cd backend && npm test`.
 
 ## Credits
 

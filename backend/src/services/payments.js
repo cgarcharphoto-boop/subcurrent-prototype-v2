@@ -5,6 +5,9 @@ import { env } from '../env.js';
 // can be built and tested end to end without a Stripe account.
 let stripeClient = null;
 export const paymentsLive = Boolean(env.stripeSecretKey);
+// Server-side confirmation with Stripe's test card only works in test mode.
+// A live key needs a client-side card form (Checkout or Payment Element).
+export const paymentsTestMode = env.stripeSecretKey.startsWith('sk_test_') || env.stripeSecretKey.startsWith('rk_test_');
 
 async function getStripe() {
   if (!stripeClient) {
@@ -17,6 +20,9 @@ async function getStripe() {
 export async function charge({ amountCents, currency = 'usd', description, idempotencyKey }) {
   if (!paymentsLive) {
     return { ok: true, mock: true, ref: `mock_${idempotencyKey}`, status: 'succeeded' };
+  }
+  if (!paymentsTestMode) {
+    throw Object.assign(new Error('Live Stripe keys need the card form; use a test key (sk_test_) for the prototype'), { status: 503 });
   }
   const stripe = await getStripe();
   const intent = await stripe.paymentIntents.create(
