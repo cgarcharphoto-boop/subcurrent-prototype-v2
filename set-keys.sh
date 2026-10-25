@@ -9,6 +9,11 @@ cd "$(dirname "$0")"
 TEAM=thedude007s-projects
 REPLACE=0; [ "${1:-}" = "--replace" ] && REPLACE=1
 V() { npx --yes vercel@latest "$@" --scope "$TEAM"; }
+if [ ! -t 0 ]; then
+  echo "set-keys.sh needs a real terminal so it can read keys without showing them."
+  echo "Open Terminal and run: cd $(pwd) && ./set-keys.sh"
+  exit 1
+fi
 
 EXISTING=$(V env ls --environment production 2>/dev/null | awk 'NR>2{print $1}')
 changed=0
