@@ -26,7 +26,11 @@ export async function charge({ amountCents, currency = 'usd', description, idemp
   }
   const stripe = await getStripe();
   const intent = await stripe.paymentIntents.create(
-    { amount: amountCents, currency, description, confirm: true, payment_method: 'pm_card_visa' },
+    {
+      amount: amountCents, currency, description, confirm: true, payment_method: 'pm_card_visa',
+      // Server-side confirm can't follow a redirect, so card-only.
+      automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+    },
     { idempotencyKey }
   );
   return { ok: intent.status === 'succeeded', mock: false, ref: intent.id, status: intent.status };
