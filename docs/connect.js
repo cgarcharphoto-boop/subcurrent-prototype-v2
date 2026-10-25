@@ -1456,6 +1456,36 @@
       }
     }
 
+    // ---- Owner portal "Ping phones": a real ping to the crew's phones ----
+    if (act === 'osend') {
+      var opTo = document.getElementById('opTo'), opKind = document.getElementById('opKind'), opText = document.getElementById('opText');
+      var toLabel = opTo && opTo.options[opTo.selectedIndex] ? opTo.options[opTo.selectedIndex].text.trim() : 'All crew';
+      var toKey = CHAN_BY_NAME[toLabel] || CHAN_BY_NAME[opTo && opTo.value] || toLabel;
+      var kind = opKind ? opKind.value : 'task';
+      var title = (opText && opText.value.trim()) || 'Swap the wristband box at the main door';
+      crewApi('/crew/pings', { method: 'POST', body: { kind: kind === 'set' ? 'info' : kind, title: title, to: [toKey] } })
+        .then(function () { toast('Real ping sent to ' + toLabel + '. It shows on crew phones under Live, then Crew.'); })
+        .catch(function (err) { toast('Ping failed: ' + err.message, true); });
+    }
+
+    // ---- Push: the app's push buttons send real notifications ----
+    if (act === 'realpush' || act === 'testpush') enablePush();
+
+    // ---- Owner exports: the real books as CSV when an owner is signed in ----
+    if ((act === 'coexport' || act === 'plexport' || act === 'payexport') && owner) {
+      e.stopPropagation(); e.preventDefault();
+      fetch(API_BASE + '/owner/books/export.csv', { headers: { Authorization: 'Bearer ' + owner.token } })
+        .then(function (r) { if (!r.ok) throw new Error('Export failed (' + r.status + ')'); return r.blob(); })
+        .then(function (blob) {
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob); a.download = 'subcurrent-books.csv';
+          document.body.appendChild(a); a.click(); a.remove();
+          toast('Downloaded the real books: P&L, expenses and labor.');
+        })
+        .catch(function (err) { toast(err.message, true); });
+      return;
+    }
+
     // ---- Teams portal (the crew's phone) goes to the real crew API ----
     if (act === 'tsend') {
       var tm = document.getElementById('tMsg');
