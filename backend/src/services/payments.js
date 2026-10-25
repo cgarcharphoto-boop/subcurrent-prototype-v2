@@ -35,3 +35,39 @@ export async function charge({ amountCents, currency = 'usd', description, idemp
   );
   return { ok: intent.status === 'succeeded', mock: false, ref: intent.id, status: intent.status };
 }
+
+// ---- Stripe Checkout: the fan types their own card on Stripe's page ----
+// Order details ride in session metadata, so fulfillment needs nothing but
+// the session id (from the webhook or the fan's return to the app).
+export async function createCheckout({ orderId, fanId, eventId, tierId, tierName, eventTitle, unitCents, qty, holderName, successUrl, cancelUrl }) {
+  const stripe = await getStripe();
+  return stripe.checkout.sessions.create(
+    {
+      mode: 'payment',
+      line_items: [{ quantity: qty, price_data: { currency: 'usd', unit_amount: unitCents, product_data: { name: `${eventTitle}: ${tierName}` } } }],
+      metadata: { orderId, fanId, eventId, tierId, qty: String(qty), holderName },
+      client_reference_id: orderId,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
+    },
+    { idempotencyKey: `checkout-${orderId}` }
+  );
+}
+
+export async function getCheckout(sessionId) {
+  const stripe = await getStripe();
+  return stripe.checkout.sessions.retrieve(sessionId);
+}
+
+export async function refund(paymentIntentId) {
+  const stripe = await getStripe();
+  return stripe.refunds.create({ payment_intent: paymentIntentId });
+}
+
+// Returns the verified event, or throws if the signature doesn't match.
+export async function verifyWebhook(rawBody, signature) {
+  if (!env.stripeWebhookSecret) throw Object.assign(new Error('Webhook secret not set'), { status: 503 });
+  const stripe = await getStripe();
+  return stripe.webhooks.constructEvent(rawBody, signature, env.stripeWebhookSecret);
+}

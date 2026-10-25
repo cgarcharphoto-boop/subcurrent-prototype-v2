@@ -240,7 +240,7 @@
       if (!opts.length) opts = events;
       el.innerHTML = '<select id="sc-ev">' + opts.map(function (e) { return '<option value="' + esc(e.slug) + '">' + esc(e.title) + '</option>'; }).join('') + '</select>' +
         '<div class="row"><select id="sc-tier"></select><select id="sc-qty" style="flex:.4">' + [1, 2, 3, 4].map(function (n) { return '<option>' + n + '</option>'; }).join('') + '</select></div>' +
-        '<button class="b" data-sc="buy">Buy</button><p class="muted">' + (health && health.integrations.payments ? 'Charges a real card through Stripe.' : 'Payments are in test mode. No card is charged.') + '</p>';
+        '<button class="b" data-sc="buy">Buy</button><p class="muted">' + (health && health.integrations.payments ? (health.integrations.checkout ? 'Opens Stripe checkout. Test mode: use card 4242 4242 4242 4242.' : 'Charges Stripe\u2019s test card.') : 'Payments are in test mode. No card is charged.') + '</p>';
       opts.forEach(function (e) { eventCache[e.slug] = e; });
       fillTiers();
       $('#sc-ev').onchange = fillTiers;
@@ -297,7 +297,14 @@
   function buy(slug, tierId, qty, source) {
     return ensureFan().then(function (f) {
       return getEvent(slug).then(function (ev) {
-        return fanApi('/tickets/purchase', { method: 'POST', body: { eventId: ev.id, tierId: tierId, qty: qty, holderName: fan.name || f.name } })
+        var order = { eventId: ev.id, tierId: tierId, qty: qty, holderName: fan.name || f.name };
+        // Card payments on: hand off to Stripe's checkout page. The return
+        // trip lands on finishCheckout() below.
+        if (health.integrations.checkout) {
+          toast('Opening secure checkout\u2026');
+          return fanApi('/tickets/checkout', { method: 'POST', body: order }).then(function (r) { location.href = r.url; return r; });
+        }
+        return fanApi('/tickets/purchase', { method: 'POST', body: order })
           .then(function (r) {
             delete eventCache[slug];
             toast('Real ' + (qty > 1 ? qty + ' tickets' : 'ticket') + ' issued' + (r.mockPayment ? ' (test payment)' : '') + '. Open Live to see the door code.');
@@ -306,6 +313,36 @@
           });
       });
     }).catch(function (e) { toast('Real purchase failed: ' + e.message, true); });
+  }
+
+  // Back from Stripe: confirm the order (the webhook may already have issued
+  // the tickets; this call is safe either way), then tidy the URL.
+  function finishCheckout() {
+    var q = new URLSearchParams(location.search);
+    var state = q.get('checkout');
+    if (!state) return;
+    var id = q.get('session_id');
+    q.delete('checkout'); q.delete('session_id');
+    history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash);
+    if (state === 'cancel') { toast('Checkout canceled. No card was charged.'); return; }
+    if (!id) return;
+    var tries = 0;
+    (function check() {
+      fanApi('/tickets/checkout/' + encodeURIComponent(id)).then(function (r) {
+        if (r.status === 'paid') {
+          var n = (r.tickets || []).length;
+          eventCache = {};
+          toast('Paid. ' + (n > 1 ? n + ' tickets are' : 'Your ticket is') + ' in Live \u2192 Tickets.');
+          render();
+        } else if (r.status === 'refunded') {
+          toast('That tier sold out while you paid. Your card was refunded.', true);
+        } else if (r.status === 'unpaid' && ++tries < 8) {
+          setTimeout(check, 1500);
+        } else {
+          toast('Payment not confirmed yet. Check Live \u2192 Tickets in a minute.', true);
+        }
+      }).catch(function (e) { toast('Could not confirm payment: ' + e.message, true); });
+    })();
   }
 
   // ----- Door tab -----
@@ -1673,6 +1710,7 @@
       syncAppCounts(true);
       checkUnread();
       setInterval(checkUnread, 30000);
+      finishCheckout();
     })
     .catch(function () { /* backend unreachable: stay invisible, app runs as a pure prototype */ });
 })();

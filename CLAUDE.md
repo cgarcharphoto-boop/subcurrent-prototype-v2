@@ -14,7 +14,7 @@ Repo: github.com/cgarcharphoto-boop/subcurrent-prototype-v2. Vercel team: thedud
 
 ## Integrations
 Each one turns on when its env vars are set; until then it is simulated and reports honestly (e.g. broadcast says `not_connected`). The user enters keys with `./set-keys.sh` (hidden input, redeploys). See README for the variable list.
-- Stripe: the server-side charge confirms with `pm_card_visa`, so only test keys (`sk_test_`) work. Real cards need Stripe Checkout, which isn't built.
+- Stripe: fans pay on Stripe Checkout (`POST /tickets/checkout`). Tickets are issued by `fulfillCheckout`, from the webhook `/webhooks/stripe` or the fan's return (`GET /tickets/checkout/:id`), exactly once; a sold-out tier refunds. set-keys.sh registers the webhook and stores `STRIPE_WEBHOOK_SECRET`. The older `/tickets/purchase` (server-side test card) is the fallback when no webhook secret is set.
 - Anthropic: flyer reading and the night recap; model from `ANTHROPIC_MODEL` (default `claude-sonnet-5-5`).
 
 ## Tests

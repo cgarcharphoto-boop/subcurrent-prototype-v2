@@ -17,6 +17,7 @@ export const env = {
   vapidSubject: process.env.VAPID_SUBJECT || 'mailto:admin@example.com',
 
   stripeSecretKey: process.env.STRIPE_SECRET_KEY || '',
+  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
   twilioSid: process.env.TWILIO_ACCOUNT_SID || '',
   twilioToken: process.env.TWILIO_AUTH_TOKEN || '',
   twilioFrom: process.env.TWILIO_FROM_NUMBER || '',

@@ -6,7 +6,8 @@ import rateLimit from 'express-rate-limit';
 import { env } from './env.js';
 import { authRouter } from './routes/auth.js';
 import { eventsRouter } from './routes/events.js';
-import { ticketsRouter } from './routes/tickets.js';
+import { ticketsRouter, fulfillCheckout } from './routes/tickets.js';
+import { verifyWebhook } from './services/payments.js';
 import { ownerRouter } from './routes/owner.js';
 import { pushRouter } from './routes/push.js';
 import { feedRouter, moderationRouter } from './routes/feed.js';
@@ -31,6 +32,25 @@ app.use(
     credentials: true,
   })
 );
+// Stripe signs the exact bytes it sent, so this route reads the raw body and
+// has to come before express.json.
+app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+  let event;
+  try {
+    event = await verifyWebhook(req.body, req.headers['stripe-signature']);
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.status ? e.message : 'Bad signature' });
+  }
+  try {
+    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
+      await fulfillCheckout(event.data.object);
+    }
+    res.json({ received: true });
+  } catch (e) {
+    console.error('stripe webhook', e);
+    res.status(500).json({ error: 'Fulfillment failed; Stripe will retry' });
+  }
+});
 app.use(express.json({ limit: '8mb' })); // flyer photos ride in as base64
 app.use(morgan(process.env.NODE_ENV === 'test' ? 'tiny' : 'dev'));
 
@@ -43,7 +63,7 @@ app.use(['/auth/fan/login', '/auth/fan/signup', '/auth/fan/demo', '/auth/owner/l
 app.get('/health', (req, res) =>
   res.json({
     ok: true,
-    integrations: { payments: paymentsLive, sms: smsLive, flyerAi: flyerAiLive, push: pushConfigured, crew: true, ...Object.fromEntries(Object.entries(socialLive).map(([k, v]) => ['social_' + k, v])) },
+    integrations: { payments: paymentsLive, checkout: paymentsLive && Boolean(env.stripeWebhookSecret), sms: smsLive, flyerAi: flyerAiLive, push: pushConfigured, crew: true, ...Object.fromEntries(Object.entries(socialLive).map(([k, v]) => ['social_' + k, v])) },
   })
 );
 

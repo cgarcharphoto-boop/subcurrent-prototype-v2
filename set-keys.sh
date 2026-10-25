@@ -18,6 +18,26 @@ fi
 EXISTING=$(V env ls --environment production 2>/dev/null | awk 'NR>2{print $1}')
 changed=0
 
+# Point Stripe at our webhook and store its signing secret. Replaces any old
+# endpoint for the same URL, so re-running after a key roll is safe.
+stripe_webhook() {
+  local key=$1 url="https://subcurrent-prototype-v2.vercel.app/api/webhooks/stripe" id secret
+  for id in $(curl -s -u "$key:" "https://api.stripe.com/v1/webhook_endpoints?limit=100" \
+      | python3 -c "import sys,json;[print(e['id']) for e in json.load(sys.stdin).get('data',[]) if e['url']=='$url']"); do
+    curl -s -u "$key:" -X DELETE "https://api.stripe.com/v1/webhook_endpoints/$id" >/dev/null
+  done
+  secret=$(curl -s -u "$key:" https://api.stripe.com/v1/webhook_endpoints -d url="$url" \
+      -d "enabled_events[]=checkout.session.completed" -d "enabled_events[]=checkout.session.async_payment_succeeded" \
+      -d "description=Subcurrent Prototype v2" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("secret",""))')
+  case "$secret" in
+    whsec_*) for e in production preview development; do
+               V env rm STRIPE_WEBHOOK_SECRET "$e" --yes >/dev/null 2>&1 || true
+               printf '%s' "$secret" | V env add STRIPE_WEBHOOK_SECRET "$e" >/dev/null
+             done; echo "    webhook registered with Stripe";;
+    *) echo "    could not register the Stripe webhook; check the key";;
+  esac
+}
+
 ask() { # name, help
   local name=$1 help=$2 val
   if [ $REPLACE = 0 ] && grep -qx "$name" <<<"$EXISTING"; then echo "  $name already set, skipping"; return; fi
@@ -29,6 +49,7 @@ ask() { # name, help
     printf '%s' "$val" | V env add "$name" "$e" >/dev/null
   done
   echo "    set"
+  [ "$name" = STRIPE_SECRET_KEY ] && stripe_webhook "$val"
   changed=1
 }
 

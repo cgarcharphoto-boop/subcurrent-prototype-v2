@@ -29,13 +29,13 @@ A clickable prototype of a Subcurrent fan app and owner portal. It opens on the 
 
 | Integration | Env vars | Without keys |
 |---|---|---|
-| Payments (Stripe) | `STRIPE_SECRET_KEY` (test key, `sk_test_`) | Orders are marked paid |
+| Payments (Stripe Checkout) | `STRIPE_SECRET_KEY`, plus `STRIPE_WEBHOOK_SECRET` (set-keys.sh registers the webhook for you) | Orders are marked paid |
 | Flyer AI + recap summary (Anthropic) | `ANTHROPIC_API_KEY`, optional `ANTHROPIC_MODEL` | Sample flyer fields, template recap |
 | SMS (Twilio) | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` | Logged, not sent |
 | Facebook / Instagram | `META_PAGE_ID`, `META_PAGE_TOKEN`, `IG_USER_ID` | Recorded as not connected |
 | X | `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET` | Recorded as not connected |
 
-Server-side checkout uses Stripe's test card, so only test keys work. Live card payments need a card form (Stripe Checkout).
+Fans pay on Stripe Checkout; tickets are issued by the webhook or on return to the app, whichever comes first, and only once. If the tier sold out mid-payment, the charge is refunded. Test mode card: 4242 4242 4242 4242.
 
 ## Deploy
 
