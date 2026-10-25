@@ -12,26 +12,31 @@ generator client {
 }
 
 model Fan {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  phone        String?  @unique
+  id           String             @id @default(cuid())
+  email        String             @unique
+  phone        String?            @unique
   passwordHash String
   name         String
-  createdAt    DateTime @default(now())
+  createdAt    DateTime           @default(now())
   tickets      Ticket[]
   orders       Order[]
   pushSubs     PushSubscription[]
-  smsOptIn     Boolean  @default(false)
+  smsOptIn     Boolean            @default(false)
   posts        Post[]
   likes        PostLike[]
   comments     Comment[]
   thread       Thread?
-  handle       String?  @unique // public @name for fan-to-fan messages; null = not findable
+  handle       String?            @unique // public @name for fan-to-fan messages; null = not findable
   pollVotes    PollVote[]
   reports      Report[]
   dmSent       DirectMessage[]
-  blocking     Block[]  @relation("blocker")
-  blockedBy    Block[]  @relation("blocked")
+  blocking     Block[]            @relation("blocker")
+  blockedBy    Block[]            @relation("blocked")
+  bio          String?
+  bannedUntil  DateTime? // set by moderation; no posting or commenting until then
+  rsvps        Rsvp[]
+  giveaways    GiveawayEntry[]
+  follows      Follow[]
 }
 
 model Owner {
@@ -45,90 +50,90 @@ model Owner {
 }
 
 model Artist {
-  id        String   @id @default(cuid())
-  name      String
-  genre     String?
+  id            String       @id @default(cuid())
+  name          String
+  genre         String?
   soundcloudUrl String?
-  slots     LineupSlot[]
+  slots         LineupSlot[]
 }
 
 model Event {
-  id          String   @id @default(cuid())
-  title       String
-  slug        String   @unique
-  status      String   @default("draft") // draft | announced | on_sale | sold_out | past
-  startAt     DateTime
-  doorsAt     DateTime
-  venueName   String?
-  venueAddr   String?
-  revealMode  String   @default("checkout") // "checkout" | "timed"
-  dropAt      DateTime?
+  id            String         @id @default(cuid())
+  title         String
+  slug          String         @unique
+  status        String         @default("draft") // draft | announced | on_sale | sold_out | past
+  startAt       DateTime
+  doorsAt       DateTime
+  venueName     String?
+  venueAddr     String?
+  revealMode    String         @default("checkout") // "checkout" | "timed"
+  dropAt        DateTime?
   multipassSlug String? // when set, ticketing is bridged to Multipass instead of native checkout
-  capacity    Int?     // venue headcount limit; null = sum of tier capacities
-  doorIn      Int      @default(0) // admitted (valid scans + manual admits)
-  doorOut     Int      @default(0) // left the venue
-  peakInside  Int      @default(0)
-  entryHold   Boolean  @default(false) // true at 100%: door stops admitting
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  tiers       Tier[]
-  lineup      LineupSlot[]
-  tickets     Ticket[]
-  drops       LocationDrop[]
+  capacity      Int? // venue headcount limit; null = sum of tier capacities
+  doorIn        Int            @default(0) // admitted (valid scans + manual admits)
+  doorOut       Int            @default(0) // left the venue
+  peakInside    Int            @default(0)
+  entryHold     Boolean        @default(false) // true at 100%: door stops admitting
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  tiers         Tier[]
+  lineup        LineupSlot[]
+  tickets       Ticket[]
+  drops         LocationDrop[]
 }
 
 model LineupSlot {
-  id        String  @id @default(cuid())
-  event     Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
   eventId   String
-  artist    Artist  @relation(fields: [artistId], references: [id])
+  artist    Artist   @relation(fields: [artistId], references: [id])
   artistId  String
   startTime DateTime
-  sortOrder Int     @default(0)
+  sortOrder Int      @default(0)
 
   @@index([eventId])
 }
 
 model Tier {
-  id        String   @id @default(cuid())
-  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  eventId   String
-  name      String
+  id         String  @id @default(cuid())
+  event      Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId    String
+  name       String
   priceCents Int
-  capacity  Int
-  soldCount Int      @default(0)
-  salesOpen Boolean  @default(true)
+  capacity   Int
+  soldCount  Int     @default(0)
+  salesOpen  Boolean @default(true)
 
   @@index([eventId])
 }
 
 model Order {
-  id            String   @id @default(cuid())
-  fan           Fan      @relation(fields: [fanId], references: [id])
-  fanId         String
-  totalCents    Int
-  status        String   @default("pending") // pending | paid | refunded | failed
-  paymentRef    String?  // Stripe PaymentIntent id once real payments are wired in
-  createdAt     DateTime @default(now())
-  tickets       Ticket[]
+  id         String   @id @default(cuid())
+  fan        Fan      @relation(fields: [fanId], references: [id])
+  fanId      String
+  totalCents Int
+  status     String   @default("pending") // pending | paid | refunded | failed
+  paymentRef String? // Stripe PaymentIntent id once real payments are wired in
+  createdAt  DateTime @default(now())
+  tickets    Ticket[]
 
   @@index([fanId])
 }
 
 model Ticket {
-  id          String   @id @default(cuid())
-  event       Event    @relation(fields: [eventId], references: [id])
+  id          String    @id @default(cuid())
+  event       Event     @relation(fields: [eventId], references: [id])
   eventId     String
-  fan         Fan      @relation(fields: [fanId], references: [id])
+  fan         Fan       @relation(fields: [fanId], references: [id])
   fanId       String
-  order       Order?   @relation(fields: [orderId], references: [id])
+  order       Order?    @relation(fields: [orderId], references: [id])
   orderId     String?
   tierName    String
   holderName  String
-  qrSecret    String   // per-ticket secret seed for the rotating TOTP-style code
-  source      String   @default("native") // "native" | "multipass"
+  qrSecret    String // per-ticket secret seed for the rotating TOTP-style code
+  source      String    @default("native") // "native" | "multipass"
   checkedInAt DateTime?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
   scans       ScanLog[]
 
   @@index([eventId])
@@ -139,8 +144,8 @@ model ScanLog {
   id        String   @id @default(cuid())
   ticket    Ticket   @relation(fields: [ticketId], references: [id])
   ticketId  String
-  result    String   // "valid" | "already_used" | "wrong_event" | "invalid_code"
-  scannedBy String?  // owner id
+  result    String // "valid" | "already_used" | "wrong_event" | "invalid_code"
+  scannedBy String? // owner id
   scannedAt DateTime @default(now())
 
   @@index([ticketId])
@@ -175,26 +180,26 @@ model PushSubscription {
 // A post is written by a fan or by the Subcurrent team (an owner account).
 // authorName is stored so the feed renders without joining owners.
 model Post {
-  id         String     @id @default(cuid())
-  fan        Fan?       @relation(fields: [fanId], references: [id], onDelete: Cascade)
-  fanId      String?
-  ownerId    String?
-  authorName String
-  fromTeam   Boolean    @default(false)
-  text       String
-  eventSlug  String?
-  pinned     Boolean    @default(false)
-  status     String     @default("visible") // visible | held | removed
-  heldReason String?
-  appKey     String?    @unique // id of the matching post in the front-end prototype
-  imageData  String?    // data URL (jpeg/png/webp), size-capped by the API
-  pollJson   String?    // JSON array of option labels
-  reportCount Int       @default(0)
-  createdAt  DateTime   @default(now())
-  likes      PostLike[]
-  comments   Comment[]
-  pollVotes  PollVote[]
-  reports    Report[]
+  id          String     @id @default(cuid())
+  fan         Fan?       @relation(fields: [fanId], references: [id], onDelete: Cascade)
+  fanId       String?
+  ownerId     String?
+  authorName  String
+  fromTeam    Boolean    @default(false)
+  text        String
+  eventSlug   String?
+  pinned      Boolean    @default(false)
+  status      String     @default("visible") // visible | held | removed
+  heldReason  String?
+  appKey      String?    @unique // id of the matching post in the front-end prototype
+  imageData   String? // data URL (jpeg/png/webp), size-capped by the API
+  pollJson    String? // JSON array of option labels
+  reportCount Int        @default(0)
+  createdAt   DateTime   @default(now())
+  likes       PostLike[]
+  comments    Comment[]
+  pollVotes   PollVote[]
+  reports     Report[]
 
   @@index([status, createdAt])
 }
@@ -227,13 +232,13 @@ model Comment {
 // ---- Fan <-> Subcurrent team messages ----
 // One conversation per fan; any owner/staff account answers as the team.
 model Thread {
-  id          String    @id @default(cuid())
-  fan         Fan       @relation(fields: [fanId], references: [id], onDelete: Cascade)
-  fanId       String    @unique
-  fanUnread   Int       @default(0)
-  teamUnread  Int       @default(0)
-  updatedAt   DateTime  @updatedAt
-  messages    Message[]
+  id         String    @id @default(cuid())
+  fan        Fan       @relation(fields: [fanId], references: [id], onDelete: Cascade)
+  fanId      String    @unique
+  fanUnread  Int       @default(0)
+  teamUnread Int       @default(0)
+  updatedAt  DateTime  @updatedAt
+  messages   Message[]
 
   @@index([updatedAt])
 }
@@ -326,12 +331,12 @@ model CrewInvite {
 model CrewMessage {
   id        String   @id @default(cuid())
   eventSlug String?
-  channel   String   // all | ops | door | sec | bar | prod | light | art
+  channel   String // all | ops | door | sec | bar | prod | light | art
   byKey     String
   byName    String
   byDept    String?
   text      String
-  alert     String?  // urgent | task | break | capacity | info, for system lines
+  alert     String? // urgent | task | break | capacity | info, for system lines
   createdAt DateTime @default(now())
 
   @@index([channel, createdAt])
@@ -340,10 +345,10 @@ model CrewMessage {
 model CrewPing {
   id         String    @id @default(cuid())
   eventSlug  String?
-  kind       String    // urgent | task | break | capacity | info
+  kind       String // urgent | task | break | capacity | info
   title      String
   body       String?
-  toJson     String    // JSON array of channels or crew keys; ["all"] = everyone
+  toJson     String // JSON array of channels or crew keys; ["all"] = everyone
   fromKey    String
   fromName   String
   createdAt  DateTime  @default(now())
@@ -359,7 +364,7 @@ model CrewAck {
   pingId    String
   byKey     String
   byName    String
-  answer    String   @default("ok") // ok | cant
+  answer    String   @default("ok") // ok | cant | done
   createdAt DateTime @default(now())
 
   @@unique([pingId, byKey])
@@ -368,7 +373,7 @@ model CrewAck {
 model Incident {
   id         String    @id @default(cuid())
   eventSlug  String?
-  kind       String    // incident | medic | backup | other
+  kind       String // incident | medic | backup | other
   note       String?
   byName     String
   createdAt  DateTime  @default(now())
@@ -382,11 +387,85 @@ model Broadcast {
   id          String   @id @default(cuid())
   text        String
   eventSlug   String?
-  platforms   String   // JSON array
-  resultsJson String   // JSON { platform: { status, ref?, error? } }
+  platforms   String // JSON array
+  resultsJson String // JSON { platform: { status, ref?, error? } }
   postId      String?
   byName      String
   createdAt   DateTime @default(now())
 
   @@index([createdAt])
+}
+
+// ---- Crew shifts: clock in/out and breaks, the hours behind team pay ----
+model CrewShift {
+  id        String    @id @default(cuid())
+  eventSlug String?
+  byKey     String
+  byName    String
+  dept      String?
+  inAt      DateTime  @default(now())
+  outAt     DateTime?
+  breakAt   DateTime? // set while on break
+  breakMins Int       @default(0)
+
+  @@index([byKey, outAt])
+  @@index([inAt])
+}
+
+// ---- Owner books: the team roster, purchases and recurring bills ----
+model TeamMember {
+  id        String   @id @default(cuid())
+  name      String
+  role      String   @default("Crew")
+  rateCents Int      @default(0)
+  basis     String   @default("hour") // hour | night | flat
+  email     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  kind        String   @default("purchase") // purchase | bill
+  vendor      String
+  category    String   @default("other")
+  amountCents Int
+  eventSlug   String?
+  spentAt     DateTime @default(now())
+  note        String?
+  byName      String
+  createdAt   DateTime @default(now())
+
+  @@index([eventSlug])
+  @@index([spentAt])
+}
+
+// ---- Fan intent: going, giveaway entries, follows ----
+model Rsvp {
+  eventSlug String
+  fan       Fan      @relation(fields: [fanId], references: [id], onDelete: Cascade)
+  fanId     String
+  createdAt DateTime @default(now())
+
+  @@id([eventSlug, fanId])
+}
+
+model GiveawayEntry {
+  eventSlug String
+  fan       Fan      @relation(fields: [fanId], references: [id], onDelete: Cascade)
+  fanId     String
+  won       Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@id([eventSlug, fanId])
+}
+
+model Follow {
+  fan       Fan      @relation(fields: [fanId], references: [id], onDelete: Cascade)
+  fanId     String
+  target    String // a fan @handle, or "artist:<id>"
+  createdAt DateTime @default(now())
+
+  @@id([fanId, target])
+  @@index([target])
 }

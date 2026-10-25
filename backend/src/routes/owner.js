@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db.js';
@@ -5,7 +6,7 @@ import { requireOwner } from '../middleware/auth.js';
 import { asyncRoute } from '../middleware/errors.js';
 import { verifyCode } from '../services/tickets.js';
 import { readFlyer } from '../services/flyerAI.js';
-import { notifyAllFans } from '../services/push.js';
+import { notifyAllFans, notifyFan } from '../services/push.js';
 import { moveDoor, currentEvent } from '../services/door.js';
 import { checkBroadcast, postTo, socialLive, label } from '../services/social.js';
 import { nightReport } from '../services/recap.js';
@@ -212,5 +213,75 @@ ownerRouter.get(
     const event = await currentEvent(req.query.event ? String(req.query.event) : null);
     if (!event) return res.status(404).json({ error: 'Show not found' });
     res.json(await nightReport(event));
+  })
+);
+
+// ---- location drop: reveal the address now and tell every ticket holder ----
+const dropSchema = z.object({ venueName: z.string().trim().min(1).max(120).optional(), venueAddr: z.string().trim().min(1).max(200).optional() });
+
+ownerRouter.post(
+  '/events/:slug/drop',
+  requireOwner,
+  asyncRoute(async (req, res) => {
+    const body = dropSchema.parse(req.body || {});
+    const ev = await currentEvent(req.params.slug);
+    if (!ev) return res.status(404).json({ error: 'Show not found' });
+    const venueName = body.venueName || ev.venueName;
+    const venueAddr = body.venueAddr || ev.venueAddr;
+    if (!venueAddr) return res.status(422).json({ error: 'Add the venue address before dropping it' });
+    const now = new Date();
+    const event = await prisma.event.update({ where: { id: ev.id }, data: { venueName, venueAddr, revealMode: 'timed', dropAt: now } });
+    await prisma.locationDrop.create({ data: { eventId: ev.id, venueName: venueName || 'Venue', address: venueAddr, revealAt: now, revealed: true } });
+    const holders = await prisma.ticket.findMany({ where: { eventId: ev.id }, select: { fanId: true }, distinct: ['fanId'] });
+    const results = await Promise.all(
+      holders.map((h) => notifyFan(h.fanId, { title: 'Location drop', body: `${event.title}: ${venueName ? venueName + ', ' : ''}${venueAddr}`, url: './' }))
+    );
+    res.json({
+      slug: event.slug, venueName, venueAddr, droppedAt: now, holders: holders.length,
+      push: { sent: results.reduce((n, r) => n + (r.sent || 0), 0), configured: results.every((r) => r.ok !== false) },
+    });
+  })
+);
+
+// ---- giveaway: draw winners and message them in the team inbox ----
+const drawSchema = z.object({ winners: z.number().int().min(1).max(50).default(1), prize: z.string().trim().max(120).default('a pair of tickets') });
+
+ownerRouter.get(
+  '/events/:slug/giveaway',
+  requireOwner,
+  asyncRoute(async (req, res) => {
+    const ev = await currentEvent(req.params.slug);
+    if (!ev) return res.status(404).json({ error: 'Show not found' });
+    const entries = await prisma.giveawayEntry.findMany({ where: { eventSlug: ev.slug }, include: { fan: { select: { name: true, handle: true } } }, orderBy: { createdAt: 'asc' } });
+    res.json({ slug: ev.slug, title: ev.title, entries: entries.length, winners: entries.filter((e) => e.won).map((e) => ({ name: e.fan.name, handle: e.fan.handle, at: e.createdAt })) });
+  })
+);
+
+ownerRouter.post(
+  '/events/:slug/giveaway/draw',
+  requireOwner,
+  asyncRoute(async (req, res) => {
+    const body = drawSchema.parse(req.body || {});
+    const ev = await currentEvent(req.params.slug);
+    if (!ev) return res.status(404).json({ error: 'Show not found' });
+    const pool = await prisma.giveawayEntry.findMany({ where: { eventSlug: ev.slug, won: false }, include: { fan: { select: { id: true, name: true, handle: true } } } });
+    if (!pool.length) return res.status(409).json({ error: 'No entries left to draw from' });
+    // Fisher-Yates with crypto randomness so draws are fair and unguessable.
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = crypto.randomInt(i + 1);
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const picked = pool.slice(0, body.winners);
+    const text = `You won the ${ev.title} giveaway: ${body.prize}. Reply here and we’ll get you sorted.`;
+    for (const w of picked) {
+      await prisma.giveawayEntry.update({ where: { eventSlug_fanId: { eventSlug: ev.slug, fanId: w.fanId } }, data: { won: true } });
+      const thread = await prisma.thread.upsert({ where: { fanId: w.fanId }, create: { fanId: w.fanId }, update: {} });
+      await prisma.$transaction([
+        prisma.message.create({ data: { threadId: thread.id, fromTeam: true, authorName: 'Subcurrent', text } }),
+        prisma.thread.update({ where: { id: thread.id }, data: { fanUnread: { increment: 1 } } }),
+      ]);
+      await notifyFan(w.fanId, { title: 'You won!', body: text.slice(0, 140), url: './' });
+    }
+    res.json({ winners: picked.map((w) => ({ name: w.fan.name, handle: w.fan.handle })), remaining: pool.length - picked.length });
   })
 );

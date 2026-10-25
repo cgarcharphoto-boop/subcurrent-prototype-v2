@@ -13,6 +13,8 @@ import { feedRouter, moderationRouter } from './routes/feed.js';
 import { dmRouter } from './routes/dms.js';
 import { messagesRouter, inboxRouter } from './routes/messages.js';
 import { crewRouter, crewAdminRouter } from './routes/crew.js';
+import { booksRouter } from './routes/books.js';
+import { followsRouter } from './routes/follows.js';
 import { socialLive } from './services/social.js';
 import { notFound, errorHandler } from './middleware/errors.js';
 import { paymentsLive } from './services/payments.js';
@@ -57,6 +59,8 @@ app.use('/owner/moderation', moderationRouter);
 app.use('/dms', dmRouter);
 app.use('/crew', crewRouter);
 app.use('/owner/crew', crewAdminRouter);
+app.use('/owner/books', booksRouter);
+app.use('/follows', followsRouter);
 
 app.use(notFound);
 app.use(errorHandler);

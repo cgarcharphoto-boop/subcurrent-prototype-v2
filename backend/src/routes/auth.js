@@ -100,7 +100,17 @@ authRouter.post(
 
 // ---- fan profile: the handle other fans use to find and message you ----
 const HANDLE = /^[a-z0-9._]{3,24}$/;
-const handleSchema = z.object({ handle: z.string().trim().toLowerCase().regex(HANDLE, '3-24 letters, numbers, dots or underscores') });
+const profileSchema = z
+  .object({
+    handle: z.string().trim().toLowerCase().regex(HANDLE, '3-24 letters, numbers, dots or underscores').optional(),
+    name: z.string().trim().min(1).max(60).optional(),
+    bio: z.string().trim().max(280).optional(),
+  })
+  .refine((b) => b.handle || b.name || b.bio !== undefined, 'Send a handle, name or bio');
+
+function shapeMe(fan) {
+  return { id: fan.id, name: fan.name, email: fan.email, handle: fan.handle, bio: fan.bio, bannedUntil: fan.bannedUntil };
+}
 
 authRouter.get(
   '/fan/me',
@@ -108,7 +118,7 @@ authRouter.get(
   asyncRoute(async (req, res) => {
     const fan = await prisma.fan.findUnique({ where: { id: req.auth.sub } });
     if (!fan) return res.status(401).json({ error: 'Account not found. Sign in again.' });
-    res.json({ id: fan.id, name: fan.name, email: fan.email, handle: fan.handle });
+    res.json(shapeMe(fan));
   })
 );
 
@@ -116,12 +126,14 @@ authRouter.patch(
   '/fan/me',
   requireFan,
   asyncRoute(async (req, res) => {
-    const body = handleSchema.parse(req.body);
+    const body = profileSchema.parse(req.body);
     const fan = await prisma.fan.findUnique({ where: { id: req.auth.sub } });
     if (!fan) return res.status(401).json({ error: 'Account not found. Sign in again.' });
-    const taken = await prisma.fan.findUnique({ where: { handle: body.handle } });
-    if (taken && taken.id !== fan.id) return res.status(409).json({ error: 'That handle is taken' });
-    const updated = await prisma.fan.update({ where: { id: fan.id }, data: { handle: body.handle } });
-    res.json({ id: updated.id, name: updated.name, email: updated.email, handle: updated.handle });
+    if (body.handle) {
+      const taken = await prisma.fan.findUnique({ where: { handle: body.handle } });
+      if (taken && taken.id !== fan.id) return res.status(409).json({ error: 'That handle is taken' });
+    }
+    const updated = await prisma.fan.update({ where: { id: fan.id }, data: body });
+    res.json(shapeMe(updated));
   })
 );

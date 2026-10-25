@@ -1,15 +1,12 @@
 // Automated version of the "before you present" checklist in README.md.
-// Usage: npm test            (checks production: Vercel deep, GitHub Pages parity)
+// Usage: npm test            (deep-checks the v2 production deploy on Vercel)
 //        npm test -- <url>   (deep-checks a single arbitrary URL, e.g. a PR preview)
 import { chromium } from 'playwright';
 
 const arg = process.argv[2];
 const SITES = arg
   ? { target: arg }
-  : {
-      vercel: 'https://subcurrent-app-prototype.vercel.app/',
-      pages: 'https://thedude0007.github.io/subcurrent-app-prototype/',
-    };
+  : { vercel: 'https://subcurrent-prototype-v2.vercel.app/' };
 
 const results = [];
 function log(ok, label, detail) {
@@ -56,7 +53,35 @@ async function run(browser, name, url, { deep }) {
   } catch (e) {
     log(false, `[${name}] service worker registers`, String(e));
   }
-  log((await page.locator('#installBtn').count()) > 0, `[${name}] install button present in DOM`);
+  // v1 had a fixed #installBtn; v2 shows an "add to Home Screen" banner on phone widths.
+  log((await page.locator('#installBtn, .a2hs').count()) > 0, `[${name}] install prompt present in DOM`);
+
+  // v2 opens a first-run sign-in sheet. "Look around first" dismisses it.
+  const skip = page.locator('#sheet [data-act="ob"][data-v="skip"]');
+  if (await skip.isVisible().catch(() => false)) {
+    await skip.click();
+    await page.locator('#sheetWrap.on').waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(400);
+  }
+  log(!(await page.locator('#sheetWrap.on').count()), `[${name}] first-run sheet dismisses`);
+
+  // The live backend answers on the same origin (v2 serves the API under /api).
+  const apiBase = new URL('api', url.endsWith('/') ? url : url + '/').toString();
+  try {
+    const health = await (await context.request.get(apiBase + '/health')).json();
+    log(health.ok === true, `[${name}] API health`, Object.entries(health.integrations || {}).filter(([, v]) => v).map(([k]) => k).join(', ') + ' live');
+    const events = await (await context.request.get(apiBase + '/events')).json();
+    log(Array.isArray(events) && events.length > 0, `[${name}] API lists shows`, `${events.length} show(s)`);
+    const demo = await (await context.request.post(apiBase + '/auth/fan/demo')).json();
+    const me = await context.request.get(apiBase + '/events/current/me', { headers: { Authorization: `Bearer ${demo.token}` } });
+    log(me.ok(), `[${name}] API fan intent (going/giveaway) answers`, `HTTP ${me.status()}`);
+    const pnl = await context.request.get(apiBase + '/owner/books/pnl');
+    log(pnl.status() === 401, `[${name}] API owner books need sign-in`, `HTTP ${pnl.status()}`);
+  } catch (e) {
+    log(false, `[${name}] API checks`, String(e));
+  }
+  await page.locator('#sc-pill').waitFor({ state: 'attached', timeout: 10000 }).catch(() => {});
+  log((await page.locator('#sc-pill').count()) > 0, `[${name}] Live panel connects`);
 
   if (!deep) {
     log(consoleErrors.length === 0, `[${name}] no console errors`, consoleErrors.slice(0, 3).join(' | '));

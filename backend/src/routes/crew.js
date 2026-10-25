@@ -8,6 +8,7 @@ import { env } from '../env.js';
 import { sign, requireOwner } from '../middleware/auth.js';
 import { asyncRoute } from '../middleware/errors.js';
 import { currentEvent, doorState, moveDoor } from '../services/door.js';
+import { shiftMinutes } from '../services/books.js';
 
 export const crewRouter = Router();
 export const crewAdminRouter = Router();
@@ -93,10 +94,11 @@ crewRouter.get(
   asyncRoute(async (req, res) => {
     const event = await currentEvent(req.query.event ? String(req.query.event) : null);
     const since = req.query.since ? new Date(String(req.query.since)) : new Date(Date.now() - 24 * 3600_000);
-    const [pings, messages, incidents] = await Promise.all([
+    const [pings, messages, incidents, shift] = await Promise.all([
       prisma.crewPing.findMany({ orderBy: { createdAt: 'desc' }, take: 30, include: { acks: { orderBy: { createdAt: 'asc' } } } }),
       prisma.crewMessage.findMany({ where: { createdAt: { gt: isNaN(since) ? new Date(0) : since } }, orderBy: { createdAt: 'desc' }, take: 120 }),
       prisma.incident.findMany({ orderBy: { createdAt: 'desc' }, take: 20 }),
+      openShift(req.crew.key),
     ]);
     const channels = Object.fromEntries(CHANNELS.map((c) => [c, []]));
     for (const m of messages.reverse()) {
@@ -104,6 +106,7 @@ crewRouter.get(
     }
     res.json({
       me: req.crew,
+      shift: shapeShift(shift),
       door: event ? await doorState(event) : null,
       pings: pings.map((p) => shapePing(p, req.crew.key)),
       channels,
@@ -160,7 +163,7 @@ crewRouter.post(
   requireCrew,
   writeLimit,
   asyncRoute(async (req, res) => {
-    const answer = req.body?.answer === 'cant' ? 'cant' : 'ok';
+    const answer = ['cant', 'done'].includes(req.body?.answer) ? req.body.answer : 'ok';
     const ping = await prisma.crewPing.findUnique({ where: { id: req.params.id } });
     if (!ping) throw httpError(404, 'Ping not found');
     await prisma.crewAck.upsert({
@@ -222,6 +225,74 @@ crewRouter.post(
   })
 );
 
+// ---- shifts: clock in/out and breaks. These hours feed team pay. ----
+function openShift(key) {
+  return prisma.crewShift.findFirst({ where: { byKey: key, outAt: null }, orderBy: { inAt: 'desc' } });
+}
+
+function shapeShift(s) {
+  if (!s) return null;
+  return { id: s.id, in: s.inAt, out: s.outAt, onBreak: Boolean(s.breakAt), breakSince: s.breakAt, breakMins: s.breakMins, workedMins: shiftMinutes(s) };
+}
+
+const clockSchema = z.object({ action: z.enum(['in', 'out']) });
+
+crewRouter.post(
+  '/clock',
+  requireCrew,
+  writeLimit,
+  asyncRoute(async (req, res) => {
+    const { action } = clockSchema.parse(req.body);
+    const open = await openShift(req.crew.key);
+    const ev = await currentEvent();
+    let shift;
+    if (action === 'in') {
+      if (open) return res.json({ shift: shapeShift(open), already: true });
+      shift = await prisma.crewShift.create({ data: { eventSlug: ev?.slug, byKey: req.crew.key, byName: req.crew.name, dept: req.crew.dept } });
+    } else {
+      if (!open) throw httpError(409, 'You are not clocked in');
+      const now = new Date();
+      const breakMins = open.breakMins + (open.breakAt ? Math.round((now - open.breakAt) / 60000) : 0);
+      shift = await prisma.crewShift.update({ where: { id: open.id }, data: { outAt: now, breakAt: null, breakMins } });
+    }
+    await prisma.crewMessage.create({
+      data: { eventSlug: ev?.slug, channel: 'ops', byKey: req.crew.key, byName: req.crew.name, byDept: req.crew.dept, text: `${req.crew.name} clocked ${action}`, alert: 'info' },
+    });
+    res.status(action === 'in' ? 201 : 200).json({ shift: shapeShift(shift) });
+  })
+);
+
+const breakSchema = z.object({ action: z.enum(['start', 'end']) });
+
+crewRouter.post(
+  '/break',
+  requireCrew,
+  writeLimit,
+  asyncRoute(async (req, res) => {
+    const { action } = breakSchema.parse(req.body);
+    let open = await openShift(req.crew.key);
+    const ev = await currentEvent();
+    // Starting a break implies you're working; clock in for them rather than refuse.
+    if (!open && action === 'start') open = await prisma.crewShift.create({ data: { eventSlug: ev?.slug, byKey: req.crew.key, byName: req.crew.name, dept: req.crew.dept } });
+    if (!open) throw httpError(409, 'You are not clocked in');
+    let shift = open;
+    if (action === 'start' && !open.breakAt) {
+      shift = await prisma.crewShift.update({ where: { id: open.id }, data: { breakAt: new Date() } });
+    } else if (action === 'end' && open.breakAt) {
+      shift = await prisma.crewShift.update({ where: { id: open.id }, data: { breakAt: null, breakMins: open.breakMins + Math.round((Date.now() - open.breakAt) / 60000) } });
+    }
+    if (shift !== open) {
+      await prisma.crewMessage.create({
+        data: {
+          eventSlug: ev?.slug, channel: req.crew.dept || 'ops', byKey: req.crew.key, byName: req.crew.name, byDept: req.crew.dept,
+          text: action === 'start' ? `${req.crew.name} is on a 15-minute break` : `${req.crew.name} is back from break`, alert: 'break',
+        },
+      });
+    }
+    res.json({ shift: shapeShift(shift) });
+  })
+);
+
 // ---- door counter: manual admits/exits share the scan path's thresholds ----
 const doorSchema = z.object({ event: z.string().optional(), delta: z.union([z.literal(1), z.literal(-1)]) });
 
@@ -261,5 +332,15 @@ crewAdminRouter.patch(
     const { capacity } = capSchema.parse(req.body);
     const ev = await prisma.event.update({ where: { slug: req.params.slug }, data: { capacity } });
     res.json(await doorState(ev));
+  })
+);
+
+crewAdminRouter.get(
+  '/shifts',
+  requireOwner,
+  asyncRoute(async (req, res) => {
+    const where = req.query.event ? { eventSlug: String(req.query.event) } : {};
+    const shifts = await prisma.crewShift.findMany({ where, orderBy: { inAt: 'desc' }, take: 200 });
+    res.json(shifts.map((s) => ({ ...shapeShift(s), name: s.byName, dept: s.dept, eventSlug: s.eventSlug })));
   })
 );

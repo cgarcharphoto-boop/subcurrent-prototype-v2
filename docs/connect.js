@@ -371,6 +371,8 @@
       if (el) el.innerHTML = '<div><b>' + d.fanCount + '</b>Fans</div><div><b>' + d.upcomingEvents + '</b>Shows live</div><div><b>' + d.totalCheckIns + '</b>Check-ins</div>';
     }).catch(function () {});
     loadOwnerEvents();
+    loadTonight();
+    loadBooks();
     loadInbox();
     loadModeration();
     startPoll(function () { loadInbox(); loadModeration(); }, 5000);
@@ -467,18 +469,20 @@
       '<p class="muted">Real ticket scans count here too. At 95% the door and security get a heads up; at 100% every crew phone gets the hold.</p></div>';
   }
   function pingHtml(p) {
-    var answered = p.acks.filter(function (a) { return a.answer === 'ok'; }).length;
+    var answered = p.acks.filter(function (a) { return a.answer !== 'cant'; }).length;
     return '<div class="card sc-ping k-' + esc(p.kind) + (p.resolved ? ' done' : '') + '"><div class="kv"><b>' + esc(p.title) + '</b><span class="muted">' + esc(ago(p.at)) + '</span></div>' +
       (p.body ? '<p style="margin:4px 0">' + esc(p.body) + '</p>' : '') +
       '<div class="kv"><span class="muted">From ' + esc(p.from) + ' · to ' + esc(p.to.join(', ')) + '</span><span class="' + (answered ? 'ok' : 'warn') + '">' + answered + ' on it</span></div>' +
-      (p.resolved ? '<p class="muted">Closed</p>' : p.mine ? '<p class="ok">You answered: ' + (p.mine === 'ok' ? 'on it' : 'can’t') + '</p>' :
-        '<div class="row"><button class="b" data-sc="crew-ack" data-v="' + esc(p.id) + '">On it</button><button class="b g" data-sc="crew-cant" data-v="' + esc(p.id) + '">Can’t</button></div>') +
+      (p.resolved ? '<p class="muted">Closed</p>' : p.mine ? '<p class="ok">You answered: ' + (p.mine === 'ok' ? 'on it' : p.mine === 'done' ? 'done' : 'can’t') + '</p>' :
+        '<div class="row"><button class="b" data-sc="crew-ack" data-v="' + esc(p.id) + '">On it</button>' +
+          (p.kind === 'task' ? '<button class="b g" data-sc="crew-done" data-v="' + esc(p.id) + '">Done</button>' : '') + '<button class="b g" data-sc="crew-cant" data-v="' + esc(p.id) + '">Can’t</button></div>') +
       (!p.resolved && (owner || p.from === (crew && crew.name)) ? '<button class="b g" data-sc="crew-resolve" data-v="' + esc(p.id) + '" style="margin-top:6px">Close ping</button>' : '') + '</div>';
   }
   function renderCrew() {
     var who = owner ? 'Ops (owner)' : crew ? esc(crew.name) + ' · ' + esc(crew.dept) + (crew.demo ? ' (demo)' : '') : 'Jules · door (demo)';
     body('<div class="kv"><span>On the crew channel as <b>' + who + '</b></span>' + (crew && !crew.demo && !owner ? '<button class="b g" data-sc="crew-leave" style="width:auto">Leave</button>' : '') + '</div>' +
       '<h3>Door</h3><div id="sc-c-door">Loading…</div>' +
+      '<h3>My shift</h3><div id="sc-c-shift"></div>' +
       '<h3>Quick calls</h3><div class="row"><button class="b g" data-sc="crew-inc" data-v="incident">Log incident</button><button class="b g" data-sc="crew-inc" data-v="medic">Call medic</button><button class="b g" data-sc="crew-inc" data-v="backup">Backup</button></div>' +
       '<h3>Pings</h3><div id="sc-c-pings"></div>' +
       '<h3>Channel</h3><select id="sc-c-chan">' + CREW_CHANNELS.map(function (c) { return '<option value="' + c[0] + '"' + (c[0] === crewChan ? ' selected' : '') + '>' + c[1] + '</option>'; }).join('') + '</select>' +
@@ -500,6 +504,7 @@
     var s = crewState;
     if (!s) return;
     var d = $('#sc-c-door'); if (d) d.innerHTML = gaugeHtml(s.door);
+    var sh = $('#sc-c-shift'); if (sh) sh.innerHTML = shiftHtml(s.shift);
     var p = $('#sc-c-pings');
     if (p) p.innerHTML = s.pings.filter(function (x) { return !x.resolved; }).slice(0, 6).map(pingHtml).join('') || '<p class="muted">No open pings.</p>';
     var t = $('#sc-c-thread');
@@ -511,6 +516,38 @@
       }).join('') : '<p class="muted">Nothing on this channel yet.</p>';
       if (stick) t.scrollTop = t.scrollHeight;
     }
+  }
+  function mins(n) { return n >= 60 ? Math.floor(n / 60) + 'h ' + (n % 60) + 'm' : n + 'm'; }
+  function shiftHtml(sh) {
+    if (!sh) return '<div class="card"><div class="kv"><span class="muted">Not clocked in</span><button class="b" data-sc="crew-clock" data-v="in" style="width:auto">Clock in</button></div></div>';
+    return '<div class="card"><div class="kv"><b>On since ' + esc(when(sh.in)) + '</b><span class="' + (sh.onBreak ? 'warn' : 'ok') + '">' + (sh.onBreak ? 'On break' : 'Working') + '</span></div>' +
+      '<div class="stats"><div><b>' + mins(sh.workedMins) + '</b>Worked</div><div><b>' + mins(sh.breakMins) + '</b>Breaks</div></div>' +
+      '<div class="row"><button class="b g" data-sc="crew-break" data-v="' + (sh.onBreak ? 'end' : 'start') + '">' + (sh.onBreak ? 'End break' : 'Start 15-min break') + '</button>' +
+      '<button class="b g" data-sc="crew-clock" data-v="out">Clock out</button></div><p class="muted">Hours here feed team pay in the owner’s books.</p></div>';
+  }
+  function crewClock(action) {
+    return crewApi('/crew/clock', { method: 'POST', body: { action: action } }).then(function (r) {
+      if (crewState) { crewState.shift = r.shift && !r.shift.out ? r.shift : null; drawCrew(); }
+      toast(action === 'in' ? 'Clocked in for real. Ops can see it.' : 'Clocked out. ' + mins(r.shift.workedMins) + ' on the books.');
+      return r;
+    }).catch(function (e) { toast('Clock ' + action + ' failed: ' + e.message, true); });
+  }
+  function crewBreak(action) {
+    return crewApi('/crew/break', { method: 'POST', body: { action: action } }).then(function (r) {
+      if (crewState) { crewState.shift = r.shift; drawCrew(); }
+      toast(action === 'start' ? 'Break started. Your channel knows you’re off for 15.' : 'Back from break.');
+      return r;
+    }).catch(function (e) { toast('Break failed: ' + e.message, true); });
+  }
+  // The app's own pings are simulated; answer the real one with the same title.
+  function ackByTitle(title, answer) {
+    if (!title) return Promise.resolve(null);
+    return crewApi('/crew/state').then(function (st) {
+      crewState = st;
+      var p = st.pings.filter(function (x) { return !x.resolved && x.title.trim().toLowerCase() === title.trim().toLowerCase(); })[0];
+      if (!p) return null;
+      return crewApi('/crew/pings/' + encodeURIComponent(p.id) + '/ack', { method: 'POST', body: { answer: answer } });
+    });
   }
   function doorMove(delta, quiet) {
     return crewApi('/crew/door', { method: 'POST', body: { delta: delta } }).then(function (r) {
@@ -535,9 +572,11 @@
     if (act === 'crew-in') return doorMove(1);
     if (act === 'crew-out') return doorMove(-1);
     if (act === 'crew-inc') return crewIncident(v);
-    if (act === 'crew-ack' || act === 'crew-cant') {
+    if (act === 'crew-clock') return crewClock(v);
+    if (act === 'crew-break') return crewBreak(v);
+    if (act === 'crew-ack' || act === 'crew-cant' || act === 'crew-done') {
       b.disabled = true;
-      return crewApi('/crew/pings/' + encodeURIComponent(v) + '/ack', { method: 'POST', body: { answer: act === 'crew-cant' ? 'cant' : 'ok' } }).then(loadCrew)
+      return crewApi('/crew/pings/' + encodeURIComponent(v) + '/ack', { method: 'POST', body: { answer: act === 'crew-cant' ? 'cant' : act === 'crew-done' ? 'done' : 'ok' } }).then(loadCrew)
         .catch(function (e) { toast(e.message, true); b.disabled = false; });
     }
     if (act === 'crew-resolve') return crewApi('/crew/pings/' + encodeURIComponent(v) + '/resolve', { method: 'POST' }).then(loadCrew).catch(function (e) { toast(e.message, true); });
@@ -587,11 +626,114 @@
   function ownerExtrasHtml() {
     var live = health && health.integrations || {};
     var plat = [['Facebook', live.social_facebook], ['Instagram', live.social_instagram], ['X', live.social_x]];
-    return '<h3>Night recap</h3><button class="b g" data-sc="night-report">Build tonight’s recap</button><div id="sc-o-report"></div>' +
+    return '<h3>Tonight</h3><div id="sc-o-tonight">Loading…</div>' +
+      '<h3>Books</h3><div id="sc-o-books">Loading…</div>' +
+      '<h3>Night recap</h3><button class="b g" data-sc="night-report">Build tonight’s recap</button><div id="sc-o-report"></div>' +
       '<h3>Crew codes</h3><div class="row"><select id="sc-o-idept"><option value="">Any department</option>' + CREW_CHANNELS.slice(1).map(function (c) { return '<option value="' + c[0] + '">' + c[1] + '</option>'; }).join('') + '</select>' +
       '<button class="b g" data-sc="crew-invite" style="flex:.6">New code</button></div><div id="sc-o-invite"></div>' +
       '<h3>Broadcast</h3><p class="muted">Posting from Owner → Feed → Broadcast in the app sends for real: the app feed always' +
       plat.map(function (p) { return ', ' + p[0] + (p[1] ? ' (connected)' : ' (not connected yet)'); }).join('') + '.</p>';
+  }
+
+  // ----- Owner: tonight's drop and giveaway, and the books -----
+  var CATS = [['talent', 'Artist booking'], ['travel', 'Travel and food'], ['rider', 'Rider and bar'], ['prod', 'Production'], ['crew', 'Crew and staffing'], ['marketing', 'Marketing'], ['gear', 'Gear'], ['office', 'Office and software'], ['other', 'Other']];
+  function loadTonight() {
+    if (!owner) return Promise.resolve();
+    return ownerApi('/owner/events/current/giveaway').then(function (g) {
+      var el = $('#sc-o-tonight');
+      if (!el) return;
+      el.innerHTML = '<div class="card"><div class="kv"><b>' + esc(g.title) + '</b><span class="muted">' + g.entries + ' giveaway entr' + (g.entries === 1 ? 'y' : 'ies') + '</span></div>' +
+        (g.winners.length ? '<p class="ok">Winners: ' + g.winners.map(function (w) { return esc(w.name) + (w.handle ? ' (@' + esc(w.handle) + ')' : ''); }).join(', ') + '</p>' : '') +
+        '<div class="row"><button class="b" data-sc="tn-drop">Drop the location now</button><button class="b g" data-sc="tn-draw"' + (g.entries > g.winners.length ? '' : ' disabled') + '>Draw a winner</button></div>' +
+        '<p class="muted">The drop reveals the address in the app and pushes it to every ticket holder. Winners get a message from Subcurrent.</p></div>';
+    }).catch(function (e) { var el = $('#sc-o-tonight'); if (el) el.innerHTML = '<p class="bad">' + esc(e.message) + '</p>'; });
+  }
+  function dropNow() {
+    return ownerApi('/owner/events/current/drop', { method: 'POST', body: {} }).then(function (r) {
+      toast('Location dropped: ' + (r.venueName ? r.venueName + ', ' : '') + r.venueAddr + '. ' + r.holders + ' ticket holder' + (r.holders === 1 ? '' : 's') + (r.push.sent ? ', ' + r.push.sent + ' push sent.' : '.'));
+      return r;
+    }).catch(function (e) { toast('Drop failed: ' + e.message, true); });
+  }
+  function bookRow(l, r, cls) { return '<div class="kv"><span>' + l + '</span><span' + (cls ? ' class="' + cls + '"' : '') + '>' + r + '</span></div>'; }
+  function loadBooks() {
+    if (!owner) return Promise.resolve();
+    return Promise.all([ownerApi('/owner/books/pnl'), ownerApi('/owner/books/team'), ownerApi('/owner/books/expenses'), getEvents()]).then(function (r) {
+      var pnl = r[0], team = r[1], spend = r[2], events = r[3];
+      var el = $('#sc-o-books');
+      if (!el) return;
+      el.innerHTML = '<div class="card">' + bookRow('Ticket revenue (' + pnl.revenue.sold + ' sold)', money(pnl.revenue.gross)) +
+        bookRow('Purchases and bills', '−' + money(pnl.expenses.total)) +
+        bookRow('Crew labor (' + pnl.labor.hours + ' h)', '−' + money(pnl.labor.total)) +
+        bookRow('<b>Net</b>', '<b>' + (pnl.net < 0 ? '−' : '') + money(Math.abs(pnl.net)) + '</b>', pnl.net < 0 ? 'bad' : 'ok') +
+        (pnl.labor.unrated.length ? '<p class="warn" style="font-size:12px">No rate on the roster for: ' + pnl.labor.unrated.map(esc).join(', ') + '</p>' : '') +
+        '<button class="b g" data-sc="bk-csv" style="margin-top:6px">Download CSV for the accountant</button></div>' +
+        '<p class="muted" style="margin-top:10px">Team (' + team.length + ')</p>' +
+        team.map(function (m) { return bookRow(esc(m.name) + ' <span class="muted">' + esc(m.role) + '</span>', money(m.rateCents) + ' / ' + esc(m.basis) + ' <button class="b g" data-sc="bk-rmteam" data-v="' + esc(m.id) + '" style="width:auto;padding:2px 8px">×</button>'); }).join('') +
+        '<div class="row"><input id="sc-bk-mname" placeholder="Name (match their crew name)"><input id="sc-bk-mrole" placeholder="Role"></div>' +
+        '<div class="row"><input id="sc-bk-mrate" inputmode="decimal" placeholder="Rate $"><select id="sc-bk-mbasis"><option value="hour">per hour</option><option value="night">per night</option><option value="flat">flat</option></select>' +
+        '<button class="b g" data-sc="bk-addteam" style="flex:.6">Add</button></div>' +
+        '<p class="muted" style="margin-top:10px">Purchases and bills (' + spend.length + ')</p>' +
+        spend.slice(0, 8).map(function (x) { return bookRow(esc(x.vendor) + ' <span class="muted">' + esc(x.category) + (x.eventSlug ? ' · show' : '') + '</span>', money(x.amountCents) + ' <button class="b g" data-sc="bk-rmexp" data-v="' + esc(x.id) + '" style="width:auto;padding:2px 8px">×</button>'); }).join('') +
+        '<div class="row"><input id="sc-bk-vendor" placeholder="Vendor"><input id="sc-bk-amt" inputmode="decimal" placeholder="Amount $"></div>' +
+        '<div class="row"><select id="sc-bk-cat">' + CATS.map(function (c) { return '<option value="' + c[0] + '">' + c[1] + '</option>'; }).join('') + '</select>' +
+        '<select id="sc-bk-show"><option value="">Company cost</option>' + events.map(function (e) { return '<option value="' + esc(e.slug) + '">' + esc(e.title) + ', ' + esc(when(e.startAt).split(',')[0]) + '</option>'; }).join('') + '</select></div>' +
+        '<div class="row"><select id="sc-bk-kind"><option value="purchase">Purchase</option><option value="bill">Bill</option></select><button class="b g" data-sc="bk-addexp">Log it</button></div>';
+    }).catch(function (e) { var el = $('#sc-o-books'); if (el) el.innerHTML = '<p class="bad">' + esc(e.message) + '</p>'; });
+  }
+  var eventsList = null;
+  function getEvents() { return eventsList ? Promise.resolve(eventsList) : api('/events').then(function (l) { eventsList = l; return l; }); }
+  function cents(v) { var n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return n > 0 ? Math.round(n * 100) : 0; }
+  // The app labels shows like "Re:Turnal Nights, Oct 23"; match on the date.
+  function slugFromLabel(label) {
+    if (!label) return Promise.resolve(null);
+    return getEvents().then(function (list) {
+      var hit = list.filter(function (e) {
+        var d = new Date(e.startAt);
+        var md = d.toLocaleString('en-US', { month: 'short', timeZone: 'America/Denver' }) + ' ' + d.toLocaleString('en-US', { day: 'numeric', timeZone: 'America/Denver' });
+        return label.indexOf(md) > -1;
+      })[0];
+      return hit ? hit.slug : null;
+    });
+  }
+  function addMember(m) {
+    return ownerApi('/owner/books/team', { method: 'POST', body: m });
+  }
+  function addExpense(x) {
+    return ownerApi('/owner/books/expenses', { method: 'POST', body: x });
+  }
+  function onBooksClick(act, v, b) {
+    if (act === 'tn-drop') return dropNow().then(loadTonight);
+    if (act === 'tn-draw') {
+      b.disabled = true;
+      return ownerApi('/owner/events/current/giveaway/draw', { method: 'POST', body: { winners: 1 } }).then(function (r) {
+        toast('Winner: ' + r.winners.map(function (w) { return w.name; }).join(', ') + '. They got a message from Subcurrent.'); return loadTonight();
+      }).catch(function (e) { b.disabled = false; toast(e.message, true); });
+    }
+    if (act === 'bk-addteam') {
+      var name = val('sc-bk-mname');
+      if (!name) return toast('Add a name', true);
+      return addMember({ name: name, role: val('sc-bk-mrole') || 'Crew', rateCents: cents(val('sc-bk-mrate')), basis: $('#sc-bk-mbasis').value })
+        .then(function () { toast('Added ' + name + ' to the team.'); return loadBooks(); }).catch(function (e) { toast(e.message, true); });
+    }
+    if (act === 'bk-addexp') {
+      var amt = cents(val('sc-bk-amt'));
+      if (!amt) return toast('Enter an amount', true);
+      var x = { vendor: val('sc-bk-vendor') || 'Purchase', amountCents: amt, category: $('#sc-bk-cat').value, kind: $('#sc-bk-kind').value };
+      if ($('#sc-bk-show').value) x.eventSlug = $('#sc-bk-show').value;
+      return addExpense(x).then(function () { toast('Logged ' + money(amt) + '.'); return loadBooks(); }).catch(function (e) { toast(e.message, true); });
+    }
+    if (act === 'bk-rmteam') return ownerApi('/owner/books/team/' + encodeURIComponent(v), { method: 'DELETE' }).then(loadBooks).catch(function (e) { toast(e.message, true); });
+    if (act === 'bk-rmexp') return ownerApi('/owner/books/expenses/' + encodeURIComponent(v), { method: 'DELETE' }).then(loadBooks).catch(function (e) { toast(e.message, true); });
+    if (act === 'bk-csv') {
+      return fetch(API_BASE + '/owner/books/export.csv', { headers: { Authorization: 'Bearer ' + owner.token } })
+        .then(function (r) { if (!r.ok) throw new Error('Export failed (' + r.status + ')'); return r.blob(); })
+        .then(function (blob) {
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob); a.download = 'subcurrent-books.csv';
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+        }).catch(function (e) { toast(e.message, true); });
+    }
   }
 
   // ---------- polling ----------
@@ -975,7 +1117,8 @@
           '<p class="warn" style="font-size:12px">' + esc(p.heldReason || 'Held') + (p.reports && p.reports.length ? '. Reasons: ' + esc(p.reports.join(', ')) : '') + '</p>' +
           (p.text ? '<div class="txt">' + esc(p.text) + '</div>' : '') +
           (p.image ? '<img src="' + esc(API_BASE + p.image) + '" alt="" style="width:100%;border-radius:10px;margin:0 0 8px">' : '') +
-          '<div class="row"><button class="b" data-sc="modapprove" data-v="' + esc(p.id) + '">Approve</button><button class="b g" data-sc="modremove" data-v="' + esc(p.id) + '">Remove</button></div></div>';
+          '<div class="row"><button class="b" data-sc="modapprove" data-v="' + esc(p.id) + '">Approve</button><button class="b g" data-sc="modremove" data-v="' + esc(p.id) + '">Remove</button></div>' +
+          (p.fromTeam ? '' : '<button class="b g" data-sc="modban" data-v="' + esc(p.id) + '" style="margin-top:6px;color:#FF6B85">Remove and ban 30 days</button>') + '</div>';
       }).join('') : '<p class="muted">Nothing waiting. Held resale posts and posts reported by 3 fans show up here.</p>';
     }).catch(function () {});
   }
@@ -1035,6 +1178,7 @@
     if (act === 'tab') { tab = v; save('tab', tab); return render(); }
     if (act === 'push') return enablePush();
     if (/^(crew-|night-report$|transfer$)/.test(act)) return onCrewClick(act, v, b);
+    if (/^(bk-|tn-)/.test(act)) return onBooksClick(act, v, b);
     if (act === 'buy') {
       b.disabled = true;
       return buy($('#sc-ev').value, $('#sc-tier').value, Number($('#sc-qty').value), 'panel').then(function () { b.disabled = false; });
@@ -1113,6 +1257,12 @@
       return fanApi('/feed/' + encodeURIComponent(rp[0]) + '/report', { method: 'POST', body: { reason: rp[1] } })
         .then(function (r) { toast(r.already ? 'You already reported this post.' : 'Reported. The team will review it.'); return loadFeed(); })
         .catch(function (err) { toast(err.message, true); drawFeed(); });
+    }
+    if (act === 'modban') {
+      b.disabled = true;
+      return ownerApi('/owner/moderation/' + encodeURIComponent(v), { method: 'POST', body: { action: 'ban' } })
+        .then(function (r) { toast('Removed. They can’t post or comment until ' + new Date(r.bannedUntil).toLocaleDateString() + '.'); return loadModeration(); })
+        .catch(function (err) { b.disabled = false; toast(err.message, true); });
     }
     if (act === 'modapprove' || act === 'modremove') {
       b.disabled = true;
@@ -1305,6 +1455,100 @@
           }).then(function (r) { toast('Broadcast: ' + r.summary); })
             .catch(function (err) { toast('Broadcast failed: ' + err.message, true); });
         }
+      }
+    }
+
+    // ---- Fan intent: Going, giveaway, follows, profile ----
+    if (act === 'going' && !b.closest('#sc-panel')) {
+      var gwant = b.getAttribute('aria-pressed') !== 'true';
+      appPost(b.getAttribute('data-v')).then(function (p) {
+        return fanApi('/events/' + encodeURIComponent((p && p.eventSlug) || 'current') + '/going', { method: 'POST', body: { going: gwant } });
+      }).then(function (r) { if (r.going) toast('You’re on the real list. ' + r.goingCount + ' going so far.'); })
+        .catch(function (err) { toast('Real RSVP failed: ' + err.message, true); });
+    }
+    if (act === 'giveaway' && !b.disabled) {
+      fanApi('/events/current/giveaway', { method: 'POST' })
+        .then(function (r) { toast((r.already ? 'Already entered. ' : 'Entered for real. ') + r.entries + ' entr' + (r.entries === 1 ? 'y' : 'ies') + ' so far.'); })
+        .catch(function (err) { toast('Real entry failed: ' + err.message, true); });
+    }
+    // Only artists exist on the server under the app's ids; demo fans don't.
+    if (act === 'follow') {
+      var row = b.parentNode;
+      var isArtist = row && row.querySelector('[data-act="ext"][data-v="SoundCloud"]');
+      if (isArtist) {
+        var fwant = !/Following/.test(b.textContent);
+        fanApi('/follows', { method: 'POST', body: { target: 'artist:' + b.getAttribute('data-v'), follow: fwant } })
+          .then(function (r) { if (r.following) toast('Following for real. ' + r.followers + ' follower' + (r.followers === 1 ? '' : 's') + ' on the live app.'); })
+          .catch(function (err) { toast('Real follow failed: ' + err.message, true); });
+      }
+    }
+    if (act === 'obsave' && !b.disabled) {
+      var oh = document.getElementById('obHandle'), ob = document.getElementById('obBio');
+      var prof = {};
+      var hv = oh && oh.value.trim().replace(/^@/, '').toLowerCase();
+      if (hv && /^[a-z0-9._]{3,24}$/.test(hv)) prof.handle = hv;
+      if (ob) prof.bio = ob.value.trim().slice(0, 280);
+      if (prof.handle || prof.bio) {
+        fanApi('/auth/fan/me', { method: 'PATCH', body: prof }).then(function (m) {
+          if (fan && m.handle) { fan.handle = m.handle; save('fan', fan); }
+          toast('Profile saved to your real account' + (m.handle ? ' as @' + m.handle : '') + '.');
+        }).catch(function (err) { toast(err.status === 409 ? 'That @handle is taken on the live app. Pick another under Live.' : 'Profile not saved: ' + err.message, true); });
+      }
+    }
+
+    // ---- Teams portal: shifts, breaks, task check-offs and acks ----
+    if (act === 'clock') crewClock(/Clock out/.test(b.textContent) ? 'out' : 'in');
+    if (act === 'tbreak') crewBreak(/End break/.test(b.textContent) ? 'end' : 'start');
+    if (act === 'tdone' && b.getAttribute('aria-pressed') !== 'true') {
+      var tli = b.closest('li'), tb = tli && tli.querySelector('b');
+      ackByTitle(tb && tb.textContent, 'done').then(function (r) { if (r) toast('Marked done on the real task. Ops can see it.'); }).catch(function () {});
+    }
+    if (act === 'tack') {
+      var tbox = b.closest('li') || b.closest('[class*="tp"]') || b.parentNode.parentNode;
+      var th = tbox && tbox.querySelector('h2, h3, b');
+      ackByTitle(th && th.textContent, b.getAttribute('data-x') === 'cant' ? 'cant' : 'ok').then(function (r) { if (r) toast('Answered the real ping.'); }).catch(function () {});
+    }
+
+    // ---- Owner portal: drop, books, feed pins ----
+    var OWNER_ONLY = { dropnow: 1, savemember: 1, savebuy: 1, ofpin: 1, ofdel: 1 };
+    if (OWNER_ONLY[act] && !b.closest('#sc-panel') && !owner) toast('Sign in as the owner under Live to do this for real too.');
+    if (owner && !b.closest('#sc-panel')) {
+      if (act === 'dropnow') dropNow();
+      if (act === 'savemember') {
+        var mn = document.getElementById('mName'), mr = document.getElementById('mRole'), mrate = document.getElementById('mRate'), mb = document.getElementById('mBasis');
+        var basis = mb && mb.value;
+        // Salary and retainers aren't per shift, so they don't cost out crew hours.
+        var perShift = basis === 'hourly' || basis === 'flat';
+        if (mn && mn.value.trim() && cents(mrate && mrate.value)) {
+          addMember({ name: mn.value.trim(), role: (mr && mr.value.trim()) || 'Crew', rateCents: perShift ? cents(mrate.value) : 0, basis: basis === 'hourly' ? 'hour' : 'flat' })
+            .then(function (m) { toast('Added ' + m.name + ' to the real roster.'); })
+            .catch(function (err) { toast('Roster save failed: ' + err.message, true); });
+        }
+      }
+      if (act === 'savebuy') {
+        var bamt = cents(document.getElementById('bAmt') && document.getElementById('bAmt').value);
+        var bshow = document.getElementById('bShow'), bdate = document.getElementById('bDate');
+        var blabel = bshow && bshow.value && bshow.selectedOptions[0] ? bshow.selectedOptions[0].textContent : '';
+        var bvendor = (document.getElementById('bVendor') && document.getElementById('bVendor').value.trim()) || 'Purchase';
+        var bcat = document.getElementById('bCat') && document.getElementById('bCat').value;
+        if (bamt) {
+          slugFromLabel(blabel).then(function (slug) {
+            var x = { vendor: bvendor, amountCents: bamt, category: bcat || 'other' };
+            if (slug) x.eventSlug = slug;
+            if (bdate && bdate.value) x.spentAt = bdate.value;
+            return addExpense(x);
+          }).then(function (x) { toast('Logged ' + money(x.amountCents) + ' in the real books' + (x.eventSlug ? ' against the show.' : '.')); })
+            .catch(function (err) { toast('Books save failed: ' + err.message, true); });
+        }
+      }
+      if (act === 'ofpin' || act === 'ofdel') {
+        var ok = act;
+        appPost(b.getAttribute('data-v')).then(function (p) {
+          if (!p) return null;
+          return ok === 'ofpin'
+            ? ownerApi('/feed/' + encodeURIComponent(p.id) + '/pin', { method: 'POST', body: { pinned: !p.pinned } }).then(function (r) { p.pinned = r.pinned; toast(r.pinned ? 'Pinned on the live feed.' : 'Unpinned on the live feed.'); })
+            : ownerApi('/feed/' + encodeURIComponent(p.id), { method: 'DELETE' }).then(function () { delete appCounts.byKey[b.getAttribute('data-v')]; toast('Removed from the live feed.'); });
+        }).catch(function (err) { toast(err.message, true); });
       }
     }
 

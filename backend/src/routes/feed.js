@@ -28,6 +28,7 @@ async function author(req) {
   if (req.auth.kind === 'owner') return { ownerId: req.auth.sub, authorName: TEAM_NAME, fromTeam: true };
   const fan = await prisma.fan.findUnique({ where: { id: req.auth.sub } });
   if (!fan) throw httpError(401, 'Account not found. Sign in again.');
+  if (fan.bannedUntil && fan.bannedUntil > new Date()) throw httpError(403, `You can’t post until ${fan.bannedUntil.toISOString().slice(0, 10)}`);
   return { fanId: fan.id, authorName: fan.name, fromTeam: false };
 }
 
@@ -294,6 +295,19 @@ feedRouter.delete(
   })
 );
 
+// Team pins (or unpins) any visible post to the top of the feed.
+feedRouter.post(
+  '/:id/pin',
+  requireOwner,
+  asyncRoute(async (req, res) => {
+    await visiblePost(req.params.id);
+    const post = await prisma.post.findUnique({ where: { id: req.params.id }, select: { id: true, pinned: true } });
+    const pinned = typeof req.body?.pinned === 'boolean' ? req.body.pinned : !post.pinned;
+    await prisma.post.update({ where: { id: post.id }, data: { pinned } });
+    res.json({ ok: true, pinned });
+  })
+);
+
 // ---- team moderation queue ----
 moderationRouter.get(
   '/',
@@ -310,19 +324,26 @@ moderationRouter.get(
   })
 );
 
-const decisionSchema = z.object({ action: z.enum(['approve', 'remove']) });
+const decisionSchema = z.object({ action: z.enum(['approve', 'remove', 'ban']), days: z.number().int().min(1).max(365).default(30) });
+const BAN_DAYS = 30;
 
 moderationRouter.post(
   '/:id',
   requireOwner,
   asyncRoute(async (req, res) => {
-    const { action } = decisionSchema.parse(req.body);
-    const post = await prisma.post.findUnique({ where: { id: req.params.id }, select: { id: true, status: true } });
-    if (!post || post.status !== 'held') throw httpError(404, 'Nothing to review for that post');
+    const { action, days } = decisionSchema.parse(req.body);
+    const post = await prisma.post.findUnique({ where: { id: req.params.id }, select: { id: true, status: true, fanId: true } });
+    // Ban works on any fan post, held or not; approve/remove only on the queue.
+    if (!post || (action !== 'ban' && post.status !== 'held') || (action === 'ban' && (!post.fanId || post.status === 'removed'))) {
+      throw httpError(404, 'Nothing to review for that post');
+    }
     await prisma.post.update({
       where: { id: post.id },
-      data: action === 'approve' ? { status: 'visible', heldReason: null } : { status: 'removed' },
+      data: action === 'approve' ? { status: 'visible', heldReason: null } : { status: 'removed', pinned: false },
     });
-    res.json({ ok: true, status: action === 'approve' ? 'visible' : 'removed' });
+    if (action !== 'ban') return res.json({ ok: true, status: action === 'approve' ? 'visible' : 'removed' });
+    const bannedUntil = new Date(Date.now() + (days || BAN_DAYS) * 86400_000);
+    await prisma.fan.update({ where: { id: post.fanId }, data: { bannedUntil } });
+    res.json({ ok: true, status: 'removed', bannedUntil });
   })
 );

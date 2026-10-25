@@ -80,8 +80,9 @@ export async function moveDoor(eventId, delta, by = { key: 'system', name: 'Door
 
 // The show crew are working tonight: the nearest one that hasn't ended
 // (shows run about 8 hours), falling back to the next one on sale.
+// slug "current" (or none) means tonight's show, else the most recent one.
 export async function currentEvent(slug) {
-  if (slug) return prisma.event.findUnique({ where: { slug } });
+  if (slug && slug !== 'current') return prisma.event.findUnique({ where: { slug } });
   const since = new Date(Date.now() - 8 * 3600_000);
   return (
     (await prisma.event.findFirst({ where: { status: { in: ['on_sale', 'sold_out', 'announced'] }, startAt: { gte: since } }, orderBy: { startAt: 'asc' } })) ||
