@@ -51,7 +51,7 @@ authRouter.post(
 authRouter.post(
   '/fan/demo',
   asyncRoute(async (req, res) => {
-    const email = 'alex.demo@coloradobassheads.com';
+    const email = 'alex.demo@subcurrent.app';
     const fan = await prisma.fan.upsert({
       where: { email },
       update: {},

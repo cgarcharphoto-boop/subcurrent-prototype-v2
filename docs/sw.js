@@ -1,7 +1,7 @@
 // Minimal app-shell service worker — just enough to make the site installable.
 // Network-first for HTML (this is under active development, don't trap people
 // on a stale build), cache fallback for offline / flaky connections.
-const CACHE = 'subcurrent-shell-v6';
+const CACHE = 'subcurrent-shell-v7';
 const SHELL = ['./', './index.html', './connect.js', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './favicon.png'];
 
 self.addEventListener('install', (e) => {
@@ -38,7 +38,8 @@ self.addEventListener('notificationclick', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  if (e.request.method !== 'GET') return;
+  // API calls are live data behind auth: never cache them.
+  if (e.request.method !== 'GET' || new URL(e.request.url).pathname.startsWith('/api/')) return;
   e.respondWith(
     fetch(e.request)
       .then((res) => {

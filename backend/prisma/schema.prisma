@@ -64,6 +64,11 @@ model Event {
   revealMode  String   @default("checkout") // "checkout" | "timed"
   dropAt      DateTime?
   multipassSlug String? // when set, ticketing is bridged to Multipass instead of native checkout
+  capacity    Int?     // venue headcount limit; null = sum of tier capacities
+  doorIn      Int      @default(0) // admitted (valid scans + manual admits)
+  doorOut     Int      @default(0) // left the venue
+  peakInside  Int      @default(0)
+  entryHold   Boolean  @default(false) // true at 100%: door stops admitting
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   tiers       Tier[]
@@ -304,4 +309,84 @@ model Block {
   createdAt DateTime @default(now())
 
   @@id([blockerId, blockedId])
+}
+
+// ---- Teams portal (crew ops) ----
+// Crew sign in with an owner-issued invite code (or the demo crew login).
+// Names and departments are stored on each row so nothing needs a join.
+model CrewInvite {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  dept      String?
+  uses      Int      @default(0)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model CrewMessage {
+  id        String   @id @default(cuid())
+  eventSlug String?
+  channel   String   // all | ops | door | sec | bar | prod | light | art
+  byKey     String
+  byName    String
+  byDept    String?
+  text      String
+  alert     String?  // urgent | task | break | capacity | info, for system lines
+  createdAt DateTime @default(now())
+
+  @@index([channel, createdAt])
+}
+
+model CrewPing {
+  id         String    @id @default(cuid())
+  eventSlug  String?
+  kind       String    // urgent | task | break | capacity | info
+  title      String
+  body       String?
+  toJson     String    // JSON array of channels or crew keys; ["all"] = everyone
+  fromKey    String
+  fromName   String
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  acks       CrewAck[]
+
+  @@index([createdAt])
+}
+
+model CrewAck {
+  id        String   @id @default(cuid())
+  ping      CrewPing @relation(fields: [pingId], references: [id], onDelete: Cascade)
+  pingId    String
+  byKey     String
+  byName    String
+  answer    String   @default("ok") // ok | cant
+  createdAt DateTime @default(now())
+
+  @@unique([pingId, byKey])
+}
+
+model Incident {
+  id         String    @id @default(cuid())
+  eventSlug  String?
+  kind       String    // incident | medic | backup | other
+  note       String?
+  byName     String
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  @@index([createdAt])
+}
+
+// ---- Owner broadcast: one post to the app, Facebook, Instagram and X ----
+model Broadcast {
+  id          String   @id @default(cuid())
+  text        String
+  eventSlug   String?
+  platforms   String   // JSON array
+  resultsJson String   // JSON { platform: { status, ref?, error? } }
+  postId      String?
+  byName      String
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
 }

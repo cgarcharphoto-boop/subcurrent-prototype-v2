@@ -6,6 +6,10 @@ import { asyncRoute } from '../middleware/errors.js';
 import { verifyCode } from '../services/tickets.js';
 import { readFlyer } from '../services/flyerAI.js';
 import { notifyAllFans } from '../services/push.js';
+import { moveDoor, currentEvent } from '../services/door.js';
+import { checkBroadcast, postTo, socialLive, label } from '../services/social.js';
+import { nightReport } from '../services/recap.js';
+import { env } from '../env.js';
 
 export const ownerRouter = Router();
 
@@ -31,8 +35,11 @@ ownerRouter.post(
     if (!verifyCode(ticket.qrSecret, body.code)) return res.json({ result: await log('invalid_code') });
     if (ticket.checkedInAt) return res.json({ result: await log('already_used'), checkedInAt: ticket.checkedInAt });
 
+    // Capacity first: a full room means the ticket waits, unscanned.
+    const door = await moveDoor(ticket.eventId, 1, { key: 'owner:' + req.auth.sub, name: 'Door scanner' });
+    if (door.refused) return res.json({ result: 'hold', door: door.state });
     await prisma.ticket.update({ where: { id: ticket.id }, data: { checkedInAt: new Date() } });
-    res.json({ result: await log('valid'), holderName: ticket.holderName, tierName: ticket.tierName });
+    res.json({ result: await log('valid'), holderName: ticket.holderName, tierName: ticket.tierName, door: door.state });
   })
 );
 
@@ -133,5 +140,77 @@ ownerRouter.get(
       prisma.ticket.count({ where: { checkedInAt: { not: null } } }),
     ]);
     res.json({ fanCount, upcomingEvents: upcoming, totalCheckIns: checkIns });
+  })
+);
+
+// ---- Broadcast: one post to the app, Facebook, Instagram and X ----
+const PLATFORMS = ['app', 'facebook', 'instagram', 'x'];
+const IMAGE_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+const broadcastSchema = z.object({
+  text: z.string().trim().min(1).max(5000),
+  platforms: z.array(z.enum(PLATFORMS)).min(1),
+  eventSlug: z.string().max(80).optional(),
+  image: z.string().max(700_000).regex(IMAGE_RE).optional(),
+  pin: z.boolean().optional(),
+  push: z.boolean().optional(),
+  dryRun: z.boolean().optional(),
+});
+
+ownerRouter.get('/broadcast/status', requireOwner, (req, res) => res.json({ app: true, ...socialLive }));
+
+ownerRouter.post(
+  '/broadcast',
+  requireOwner,
+  asyncRoute(async (req, res) => {
+    const body = broadcastSchema.parse(req.body);
+    const platforms = [...new Set(body.platforms)];
+    const issues = checkBroadcast({ text: body.text, platforms, hasImage: Boolean(body.image) });
+    if (body.dryRun || issues.length) {
+      return res.status(issues.length && !body.dryRun ? 422 : 200).json({ error: issues.join('; ') || undefined, issues, live: { app: true, ...socialLive } });
+    }
+
+    const results = {};
+    let post = null;
+    if (platforms.includes('app') || platforms.includes('facebook') || platforms.includes('instagram')) {
+      // The app post doubles as the public home of the image for Meta to fetch.
+      post = await prisma.post.create({
+        data: {
+          ownerId: req.auth.sub, authorName: 'Subcurrent', fromTeam: true, text: body.text, eventSlug: body.eventSlug || null,
+          pinned: Boolean(body.pin), imageData: body.image || null, status: platforms.includes('app') ? 'visible' : 'removed',
+        },
+      });
+    }
+    if (platforms.includes('app')) {
+      const push = body.push ? await notifyAllFans({ title: 'Subcurrent', body: body.text.slice(0, 180), url: '/' }) : null;
+      results.app = { status: 'posted', ref: post.id, push };
+    }
+    const imageUrl = post && body.image && env.publicBaseUrl ? `${env.publicBaseUrl}/feed/${post.id}/image` : null;
+    await Promise.all(
+      platforms.filter((p) => p !== 'app').map(async (p) => { results[p] = await postTo(p, { text: body.text, imageUrl }); })
+    );
+    const b = await prisma.broadcast.create({
+      data: { text: body.text, eventSlug: body.eventSlug, platforms: JSON.stringify(platforms), resultsJson: JSON.stringify(results), postId: post?.id, byName: req.auth.role === 'admin' ? 'Owner' : 'Team' },
+    });
+    res.status(201).json({ id: b.id, results, summary: platforms.map((p) => `${label(p)}: ${results[p].status.replace('_', ' ')}`).join(' · ') });
+  })
+);
+
+ownerRouter.get(
+  '/broadcasts',
+  requireOwner,
+  asyncRoute(async (req, res) => {
+    const list = await prisma.broadcast.findMany({ orderBy: { createdAt: 'desc' }, take: 50 });
+    res.json(list.map((b) => ({ id: b.id, text: b.text, eventSlug: b.eventSlug, platforms: JSON.parse(b.platforms), results: JSON.parse(b.resultsJson), at: b.createdAt })));
+  })
+);
+
+// ---- night recap ----
+ownerRouter.get(
+  '/night-report',
+  requireOwner,
+  asyncRoute(async (req, res) => {
+    const event = await currentEvent(req.query.event ? String(req.query.event) : null);
+    if (!event) return res.status(404).json({ error: 'Show not found' });
+    res.json(await nightReport(event));
   })
 );

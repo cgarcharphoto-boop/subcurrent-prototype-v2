@@ -25,19 +25,19 @@ export async function readFlyer({ imageBase64, mediaType = 'image/jpeg' }) {
       ok: true,
       mock: true,
       fields: {
-        title: 'Altitude Afters',
-        date: 'Saturday night',
+        title: 'Undertow Afters',
+        date: 'Saturday, November 15',
         doors: '2:00 AM',
         ageLimit: '21+',
-        genres: 'Bass, riddim',
+        genres: 'Psybass, glitch, downtempo',
         venueGuess: null,
-        lineup: ['Basstroyd', 'Shank Aaron', 'NOVAKN', 'MORBEATO'],
+        lineup: ['Secret guests'],
       },
     };
   }
   const anthropic = await getClient();
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-5',
+    model: env.anthropicModel,
     max_tokens: 500,
     messages: [
       {
@@ -52,7 +52,8 @@ export async function readFlyer({ imageBase64, mediaType = 'image/jpeg' }) {
   const text = msg.content.find((b) => b.type === 'text')?.text || '{}';
   let fields;
   try {
-    fields = JSON.parse(text);
+    // Tolerate a ```json fence around the object.
+    fields = JSON.parse(text.replace(/^[^{]*/, '').replace(/[^}]*$/, ''));
   } catch {
     throw Object.assign(new Error('Model did not return valid JSON'), { status: 502, raw: text });
   }

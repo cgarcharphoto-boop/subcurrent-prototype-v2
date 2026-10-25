@@ -1,12 +1,17 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "echo 'static site, nothing to install'",
-  "buildCommand": "echo 'static site, no build'",
+  "installCommand": "cd backend && npm ci --no-audit --no-fund",
+  "buildCommand": "echo 'static app in docs/, API in api/ (Prisma client generated on install)'",
   "outputDirectory": "docs",
   "cleanUrls": true,
+  "functions": {
+    "api/index.js": { "maxDuration": 30 }
+  },
+  "rewrites": [{ "source": "/api/(.*)", "destination": "/api/index.js" }],
   "headers": [
     { "source": "/sw.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
+    { "source": "/connect.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] },
     { "source": "/(.*)", "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }] }
   ]
 }

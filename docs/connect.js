@@ -12,7 +12,10 @@
 (function () {
   'use strict';
 
-  var API_BASE = 'https://sub-current-8t66.vercel.app';
+  // Same origin as the app (Vercel serves the API under /api). A file:// copy,
+  // localhost or the GitHub Pages mirror falls back to the deployed v2.
+  var API_BASE = /^https?:$/.test(location.protocol) && !/^(localhost|127\.)|\.github\.io$/.test(location.hostname)
+    ? location.origin + '/api' : 'https://subcurrent-prototype-v2.vercel.app/api';
   try { API_BASE = localStorage.getItem('sc_api') || API_BASE; } catch (e) {}
 
   // App event id -> backend slug, and app tier id -> backend tier name.
@@ -153,6 +156,10 @@
       '#sc-body .th{display:flex;justify-content:space-between;gap:8px;width:100%;text-align:left;background:#15101F;border:1px solid rgba(238,232,255,.12);border-radius:12px;padding:10px 12px;margin:0 0 6px;color:#EEE8FF;cursor:pointer;font:14px -apple-system,system-ui,sans-serif}',
       '#sc-body .th .n{background:#FF6B85;color:#fff;border-radius:999px;font:700 11px/1 -apple-system,system-ui,sans-serif;padding:4px 7px;align-self:center}',
       '#sc-body label.ck{display:flex;align-items:center;gap:8px;font-size:13px;color:#C4B5E6;margin:0 0 8px}#sc-body label.ck input{width:auto;margin:0}',
+      '#sc-panel .sc-thread{max-height:220px;overflow:auto;margin:6px 0;display:grid;gap:6px}',
+      '#sc-panel .sc-cm{background:#15101F;border-radius:10px;padding:7px 10px;font-size:13px}#sc-panel .sc-cm.me{background:#2A1B47}',
+      '#sc-panel .sc-cm.al,#sc-panel .sc-ping{border-left:3px solid #A64DFF}#sc-panel .k-urgent,#sc-panel .k-capacity{border-left-color:#FF2EC4!important}#sc-panel .k-break{border-left-color:#F2C94B!important}',
+      '#sc-panel .sc-ping.done{opacity:.55}#sc-panel .sc-gauge{height:8px;margin-top:8px}#sc-panel .sc-gauge i{transition:width .4s}',
       '#sc-pill .n{background:#FF6B85;color:#fff;border-radius:999px;font:700 10px/1 -apple-system,system-ui,sans-serif;padding:3px 6px}',
       '#sc-toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);z-index:10000;background:#15101F;color:#EEE8FF;border:1px solid #4CC48D;border-radius:12px;padding:10px 14px;font:600 13px -apple-system,system-ui,sans-serif;opacity:0;pointer-events:none;transition:.25s;max-width:calc(100vw - 40px)}',
       '#sc-toast.on{opacity:1;transform:translate(-50%,0)}#sc-toast.bad{border-color:#FF6B85}'
@@ -201,12 +208,12 @@
     if (!p || !p.classList.contains('on')) return;
     stopCodes();
     stopPoll();
-    var tabs = [['tickets', 'Tickets'], ['feed', 'Feed'], ['msgs', 'Messages'], ['door', 'Door'], ['owner', 'Owner'], ['status', 'Status']];
+    var tabs = [['tickets', 'Tickets'], ['feed', 'Feed'], ['msgs', 'Messages'], ['crew', 'Crew'], ['door', 'Door'], ['owner', 'Owner'], ['status', 'Status']];
     p.innerHTML = '<header><h2><span style="width:8px;height:8px;border-radius:50%;background:#4CC48D;display:inline-block"></span>Live backend<button class="x" data-sc="close" aria-label="Close">×</button></h2>' +
       '<div id="sc-tabs" role="tablist">' + tabs.map(function (t) {
         return '<button role="tab" data-sc="tab" data-v="' + t[0] + '" aria-selected="' + (tab === t[0]) + '">' + t[1] + '</button>';
       }).join('') + '</div></header><div id="sc-body">Loading…</div>';
-    (({ tickets: renderTickets, feed: renderFeed, msgs: renderMsgs, door: renderDoor, owner: renderOwner, status: renderStatus })[tab] || renderTickets)();
+    (({ tickets: renderTickets, feed: renderFeed, msgs: renderMsgs, door: renderDoor, crew: renderCrew, owner: renderOwner, status: renderStatus })[tab] || renderTickets)();
   }
   function body(html) { var b = $('#sc-body'); if (b) b.innerHTML = html; }
 
@@ -262,7 +269,8 @@
           '<div class="kv"><span>' + esc(t.tierName) + ' · ' + esc(t.holderName) + '</span>' + (t.checkedInAt ? '<span class="ok">Checked in</span>' : '<span class="muted">Not scanned</span>') + '</div>' +
           '<div class="code" data-code="' + esc(t.id) + '">' + esc(t.liveCode) + '</div><div class="bar"><i data-bar="' + esc(t.id) + '" style="width:100%"></i></div>' +
           '<p class="muted" style="margin-top:6px">Door code changes every 10 seconds.</p>' +
-          '<button class="b g" data-sc="copypass" data-v="' + esc(t.id) + '">Copy door pass</button></div>';
+          '<button class="b g" data-sc="copypass" data-v="' + esc(t.id) + '">Copy door pass</button>' +
+          (t.checkedInAt ? '' : '<div class="row" style="margin-top:6px"><input id="sc-tr-' + esc(t.id) + '" placeholder="@handle of a friend" autocomplete="off"><button class="b g" data-sc="transfer" data-v="' + esc(t.id) + '" style="flex:.5">Send</button></div>') + '</div>';
       }).join('');
       startCodes();
     }).catch(function (e) { var el = $('#sc-mine'); if (el) el.innerHTML = '<p class="bad">' + esc(e.message) + '</p>'; });
@@ -353,6 +361,7 @@
       inboxHtml() + '<h3>Needs review</h3><div id="sc-mod">Loading\u2026</div>' + '<h3>Shows</h3><div id="sc-o-events">Loading\u2026</div>' +
       '<h3>Read a flyer</h3><p class="muted">' + (health && health.integrations.flyerAi ? 'Claude reads the flyer and fills in the show details.' : 'AI flyer reading is in sample mode until an Anthropic key is added.') + '</p>' +
       '<input id="sc-o-flyer" type="file" accept="image/*"><div id="sc-o-flyerres">' + (flyerResult ? '<pre>' + esc(JSON.stringify(flyerResult, null, 2)) + '</pre>' : '') + '</div>' +
+      ownerExtrasHtml() +
       '<h3>Change owner password</h3><input id="sc-pw-cur" type="password" placeholder="Current password" autocomplete="current-password">' +
       '<input id="sc-pw-new" type="password" placeholder="New password, 12+ characters" autocomplete="new-password">' +
       '<button class="b g" data-sc="changepw">Change password</button><p class="muted">Changing it signs out every other owner session.</p>' +
@@ -409,14 +418,181 @@
   function renderStatus() {
     var rows = [['Accounts and sign-in', true], ['Tickets and inventory', true], ['Rotating door codes', true], ['Door check-in', true],
       ['Push notifications', health && health.integrations.push], ['Card payments (Stripe)', health && health.integrations.payments],
-      ['Text messages (Twilio)', health && health.integrations.sms], ['AI flyer reading', health && health.integrations.flyerAi]];
+      ['Text messages (Twilio)', health && health.integrations.sms], ['AI flyer reading', health && health.integrations.flyerAi],
+      ['Crew ops: pings, channels, door count', health && health.integrations.crew], ['Broadcast to the app feed', true],
+      ['Broadcast to Facebook', health && health.integrations.social_facebook], ['Broadcast to Instagram', health && health.integrations.social_instagram],
+      ['Broadcast to X', health && health.integrations.social_x], ['AI night recap', health && health.integrations.flyerAi]];
     body('<h3>What is real right now</h3>' + rows.map(function (r) {
       return '<div class="kv"><span>' + r[0] + '</span><span class="' + (r[1] ? 'ok' : 'warn') + '">' + (r[1] ? 'Live' : 'Test mode') + '</span></div>';
     }).join('') +
-      '<h3>Demo data</h3><p class="muted">This demo server keeps its data in temporary storage. Tickets and accounts reset when it restarts after sitting idle.</p>' +
+      '<h3>Data</h3><p class="muted">Everything is stored in a real Postgres database, so tickets, posts, crew pings and door counts persist.</p>' +
       '<p class="muted">API: ' + esc(API_BASE) + '</p>');
   }
 
+
+  // ----- Crew tab: the Teams portal for real -----
+  // Crew sign in with an owner-issued code; the demo uses Jules, door lead,
+  // matching the prototype's Teams portal.
+  var crew = load('crew'); // { token, name, dept, demo }
+  var crewState = null;
+  var crewChan = load('crewchan') || 'all';
+  var CREW_CHANNELS = [['all', 'All crew'], ['ops', 'Ops'], ['door', 'Door'], ['sec', 'Security'], ['bar', 'Bar'], ['prod', 'Production'], ['light', 'Lighting'], ['art', 'Artists']];
+  var CHAN_BY_NAME = { 'All crew': 'all', all: 'all', Ops: 'ops', Door: 'door', Security: 'sec', Bar: 'bar', Production: 'prod', Lighting: 'light', Artists: 'art' };
+  function demoCrew() {
+    return api('/crew/demo', { method: 'POST' }).then(function (d) {
+      crew = { token: d.token, name: d.crew.name, dept: d.crew.dept, demo: true };
+      save('crew', crew);
+      return crew;
+    });
+  }
+  // Owners act as Ops; otherwise the stored crew login, or the demo one.
+  function crewApi(path, opts) {
+    if (owner) return ownerApi(path, opts);
+    var go = function (c) { return api(path, opts, c.token); };
+    return (crew ? Promise.resolve(crew) : demoCrew()).then(function (c) {
+      return go(c).catch(function (e) {
+        if (c.demo && e.status === 401) return demoCrew().then(go);
+        throw e;
+      });
+    });
+  }
+  function gaugeHtml(d) {
+    if (!d) return '<p class="muted">No show tonight.</p>';
+    var pct = Math.min(100, d.pct);
+    var cls = d.hold ? 'bad' : pct >= 95 ? 'warn' : 'ok';
+    return '<div class="card"><div class="kv"><b>' + esc(d.title) + '</b><span class="' + cls + '">' + (d.hold ? 'ENTRY ON HOLD' : pct >= 95 ? 'Nearly full' : 'Admitting') + '</span></div>' +
+      '<div class="stats"><div><b>' + d.inside + '</b>Inside</div><div><b>' + d.capacity + '</b>Capacity</div><div><b>' + d.peak + '</b>Peak</div></div>' +
+      '<div class="bar sc-gauge"><i style="width:' + pct + '%;background:' + (d.hold ? '#FF6B85' : pct >= 95 ? '#F2C94B' : '#4CC48D') + '"></i></div>' +
+      '<div class="row" style="margin-top:8px"><button class="b" data-sc="crew-in"' + (d.hold ? ' disabled' : '') + '>+1 In</button><button class="b g" data-sc="crew-out">−1 Out</button></div>' +
+      '<p class="muted">Real ticket scans count here too. At 95% the door and security get a heads up; at 100% every crew phone gets the hold.</p></div>';
+  }
+  function pingHtml(p) {
+    var answered = p.acks.filter(function (a) { return a.answer === 'ok'; }).length;
+    return '<div class="card sc-ping k-' + esc(p.kind) + (p.resolved ? ' done' : '') + '"><div class="kv"><b>' + esc(p.title) + '</b><span class="muted">' + esc(ago(p.at)) + '</span></div>' +
+      (p.body ? '<p style="margin:4px 0">' + esc(p.body) + '</p>' : '') +
+      '<div class="kv"><span class="muted">From ' + esc(p.from) + ' · to ' + esc(p.to.join(', ')) + '</span><span class="' + (answered ? 'ok' : 'warn') + '">' + answered + ' on it</span></div>' +
+      (p.resolved ? '<p class="muted">Closed</p>' : p.mine ? '<p class="ok">You answered: ' + (p.mine === 'ok' ? 'on it' : 'can’t') + '</p>' :
+        '<div class="row"><button class="b" data-sc="crew-ack" data-v="' + esc(p.id) + '">On it</button><button class="b g" data-sc="crew-cant" data-v="' + esc(p.id) + '">Can’t</button></div>') +
+      (!p.resolved && (owner || p.from === (crew && crew.name)) ? '<button class="b g" data-sc="crew-resolve" data-v="' + esc(p.id) + '" style="margin-top:6px">Close ping</button>' : '') + '</div>';
+  }
+  function renderCrew() {
+    var who = owner ? 'Ops (owner)' : crew ? esc(crew.name) + ' · ' + esc(crew.dept) + (crew.demo ? ' (demo)' : '') : 'Jules · door (demo)';
+    body('<div class="kv"><span>On the crew channel as <b>' + who + '</b></span>' + (crew && !crew.demo && !owner ? '<button class="b g" data-sc="crew-leave" style="width:auto">Leave</button>' : '') + '</div>' +
+      '<h3>Door</h3><div id="sc-c-door">Loading…</div>' +
+      '<h3>Quick calls</h3><div class="row"><button class="b g" data-sc="crew-inc" data-v="incident">Log incident</button><button class="b g" data-sc="crew-inc" data-v="medic">Call medic</button><button class="b g" data-sc="crew-inc" data-v="backup">Backup</button></div>' +
+      '<h3>Pings</h3><div id="sc-c-pings"></div>' +
+      '<h3>Channel</h3><select id="sc-c-chan">' + CREW_CHANNELS.map(function (c) { return '<option value="' + c[0] + '"' + (c[0] === crewChan ? ' selected' : '') + '>' + c[1] + '</option>'; }).join('') + '</select>' +
+      '<div id="sc-c-thread" class="sc-thread"></div><div class="row"><input id="sc-c-msg" placeholder="Message the channel" autocomplete="off"><button class="b" data-sc="crew-send" style="flex:.4">Send</button></div>' +
+      (owner ? '<h3>Send a ping</h3><select id="sc-c-pk"><option value="task">Task</option><option value="urgent">Urgent</option><option value="info">Heads up</option><option value="break">Break</option></select>' +
+        '<input id="sc-c-pt" placeholder="Title, e.g. Restock wristbands" maxlength="80"><button class="b" data-sc="crew-ping">Ping the ' + 'selected channel</button>' : '') +
+      (crew && !crew.demo || owner ? '' : '<h3>Join your crew</h3><p class="muted">Got a code from the owner? Use it to join under your own name.</p>' +
+        '<div class="row"><input id="sc-c-code" placeholder="Crew code" autocapitalize="characters"><input id="sc-c-name" placeholder="Your name"></div><button class="b g" data-sc="crew-join">Join</button>'));
+    var sel = $('#sc-c-chan');
+    if (sel) sel.onchange = function () { crewChan = sel.value; save('crewchan', crewChan); drawCrew(); };
+    loadCrew();
+    startPoll(loadCrew, 4000);
+  }
+  function loadCrew() {
+    return crewApi('/crew/state').then(function (s) { crewState = s; drawCrew(); return s; })
+      .catch(function (e) { var el = $('#sc-c-door'); if (el) el.innerHTML = '<p class="bad">' + esc(e.message) + '</p>'; });
+  }
+  function drawCrew() {
+    var s = crewState;
+    if (!s) return;
+    var d = $('#sc-c-door'); if (d) d.innerHTML = gaugeHtml(s.door);
+    var p = $('#sc-c-pings');
+    if (p) p.innerHTML = s.pings.filter(function (x) { return !x.resolved; }).slice(0, 6).map(pingHtml).join('') || '<p class="muted">No open pings.</p>';
+    var t = $('#sc-c-thread');
+    if (t) {
+      var stick = t.scrollTop + t.clientHeight >= t.scrollHeight - 20;
+      var list = s.channels[crewChan] || [];
+      t.innerHTML = list.length ? list.map(function (m) {
+        return '<div class="sc-cm' + (m.mine ? ' me' : '') + (m.alert ? ' al k-' + esc(m.alert) : '') + '"><b>' + esc(m.by) + '</b> <span class="muted">' + esc(ago(m.at)) + '</span><div>' + esc(m.text) + '</div></div>';
+      }).join('') : '<p class="muted">Nothing on this channel yet.</p>';
+      if (stick) t.scrollTop = t.scrollHeight;
+    }
+  }
+  function doorMove(delta, quiet) {
+    return crewApi('/crew/door', { method: 'POST', body: { delta: delta } }).then(function (r) {
+      if (crewState) { crewState.door = r.state; drawCrew(); }
+      if (r.crossed === 'hold') toast('Venue at capacity. Entry is on hold and every crew phone was pinged.', true);
+      else if (r.crossed === 'warn') toast('Venue at ' + Math.round(r.state.pct) + '%. Door and security were warned.');
+      else if (r.crossed === 'release') toast('Entry reopened. ' + r.state.inside + ' of ' + r.state.capacity + ' inside.');
+      else if (r.refused && delta > 0) toast('Entry is on hold at capacity. One out, one in.', true);
+      else if (!quiet) toast('Live headcount: ' + r.state.inside + ' of ' + r.state.capacity + '.');
+      return r;
+    }).catch(function (e) { toast('Door count failed: ' + e.message, true); });
+  }
+  function crewIncident(kind, note) {
+    return crewApi('/crew/incidents', { method: 'POST', body: note ? { kind: kind, note: note } : { kind: kind } })
+      .then(function (r) { toast(r.ping.title + '. Real ping sent to ' + r.ping.to.join(' + ') + '.'); loadCrew(); })
+      .catch(function (e) { toast('Could not log it: ' + e.message, true); });
+  }
+  function crewSend(channel, text) {
+    return crewApi('/crew/messages', { method: 'POST', body: { channel: channel, text: text } });
+  }
+  function onCrewClick(act, v, b) {
+    if (act === 'crew-in') return doorMove(1);
+    if (act === 'crew-out') return doorMove(-1);
+    if (act === 'crew-inc') return crewIncident(v);
+    if (act === 'crew-ack' || act === 'crew-cant') {
+      b.disabled = true;
+      return crewApi('/crew/pings/' + encodeURIComponent(v) + '/ack', { method: 'POST', body: { answer: act === 'crew-cant' ? 'cant' : 'ok' } }).then(loadCrew)
+        .catch(function (e) { toast(e.message, true); b.disabled = false; });
+    }
+    if (act === 'crew-resolve') return crewApi('/crew/pings/' + encodeURIComponent(v) + '/resolve', { method: 'POST' }).then(loadCrew).catch(function (e) { toast(e.message, true); });
+    if (act === 'crew-send') {
+      var text = val('sc-c-msg');
+      if (!text) return;
+      return crewSend(crewChan, text).then(function () { $('#sc-c-msg').value = ''; loadCrew(); }).catch(function (e) { toast(e.message, true); });
+    }
+    if (act === 'crew-ping') {
+      var title = val('sc-c-pt');
+      if (!title) return toast('Give the ping a title', true);
+      return crewApi('/crew/pings', { method: 'POST', body: { kind: $('#sc-c-pk').value, title: title, to: [crewChan] } })
+        .then(function () { toast('Ping sent to ' + crewChan + '.'); $('#sc-c-pt').value = ''; loadCrew(); }).catch(function (e) { toast(e.message, true); });
+    }
+    if (act === 'crew-join') {
+      return api('/crew/join', { method: 'POST', body: { code: val('sc-c-code'), name: val('sc-c-name') } }).then(function (d) {
+        crew = { token: d.token, name: d.crew.name, dept: d.crew.dept, demo: false };
+        save('crew', crew); toast('Joined the crew as ' + crew.name + ', ' + crew.dept + '.'); render();
+      }).catch(function (e) { toast(e.message, true); });
+    }
+    if (act === 'crew-leave') { crew = null; save('crew', null); return render(); }
+    if (act === 'crew-invite') {
+      return ownerApi('/owner/crew/invites', { method: 'POST', body: { dept: $('#sc-o-idept').value } }).then(function (r) {
+        var el = $('#sc-o-invite'); if (el) el.innerHTML = '<div class="code">' + esc(r.code) + '</div><p class="muted">Good for 3 days' + (r.dept ? ', joins ' + esc(r.dept) : '') + '. Crew enter it under Live, then Crew.</p>';
+      }).catch(function (e) { toast(e.message, true); });
+    }
+    if (act === 'night-report') {
+      var el = $('#sc-o-report'); if (el) el.innerHTML = '<p class="muted">Pulling the numbers…</p>';
+      return ownerApi('/owner/night-report').then(function (r) {
+        var el2 = $('#sc-o-report');
+        if (!el2) return;
+        el2.innerHTML = '<div class="card"><div class="kv"><b>' + esc(r.show.title) + '</b><span class="muted">' + (r.summary.ai ? 'Written by Claude' : 'Auto summary') + '</span></div>' +
+          '<p style="margin:6px 0">' + esc(r.summary.text) + '</p>' +
+          '<div class="stats"><div><b>' + r.sales.sold + '</b>Sold</div><div><b>' + money(r.sales.grossCents) + '</b>Gross</div><div><b>' + r.door.peak + '</b>Peak inside</div></div>' +
+          '<div class="stats"><div><b>' + r.crew.pings + '</b>Pings</div><div><b>' + (r.crew.medianAckSeconds != null ? r.crew.medianAckSeconds + 's' : '–') + '</b>Median answer</div><div><b>' + r.incidents.length + '</b>Incidents</div></div></div>';
+      }).catch(function (e) { toast(e.message, true); });
+    }
+    if (act === 'transfer') {
+      var h = val('sc-tr-' + v);
+      if (!h) return toast('Enter their @handle', true);
+      b.disabled = true;
+      return fanApi('/tickets/' + encodeURIComponent(v) + '/transfer', { method: 'POST', body: { handle: h } }).then(function (r) {
+        toast('Sent to ' + r.to.name + '. Your old code stopped working the moment it landed.'); render();
+      }).catch(function (e) { toast('Transfer failed: ' + e.message, true); b.disabled = false; });
+    }
+  }
+  function ownerExtrasHtml() {
+    var live = health && health.integrations || {};
+    var plat = [['Facebook', live.social_facebook], ['Instagram', live.social_instagram], ['X', live.social_x]];
+    return '<h3>Night recap</h3><button class="b g" data-sc="night-report">Build tonight’s recap</button><div id="sc-o-report"></div>' +
+      '<h3>Crew codes</h3><div class="row"><select id="sc-o-idept"><option value="">Any department</option>' + CREW_CHANNELS.slice(1).map(function (c) { return '<option value="' + c[0] + '">' + c[1] + '</option>'; }).join('') + '</select>' +
+      '<button class="b g" data-sc="crew-invite" style="flex:.6">New code</button></div><div id="sc-o-invite"></div>' +
+      '<h3>Broadcast</h3><p class="muted">Posting from Owner → Feed → Broadcast in the app sends for real: the app feed always' +
+      plat.map(function (p) { return ', ' + p[0] + (p[1] ? ' (connected)' : ' (not connected yet)'); }).join('') + '.</p>';
+  }
 
   // ---------- polling ----------
   var pollTimer = null;
@@ -858,6 +1034,7 @@
     if (act === 'close') return togglePanel(false);
     if (act === 'tab') { tab = v; save('tab', tab); return render(); }
     if (act === 'push') return enablePush();
+    if (/^(crew-|night-report$|transfer$)/.test(act)) return onCrewClick(act, v, b);
     if (act === 'buy') {
       b.disabled = true;
       return buy($('#sc-ev').value, $('#sc-tier').value, Number($('#sc-qty').value), 'panel').then(function () { b.disabled = false; });
@@ -1088,6 +1265,46 @@
         appPost(rw[0]).then(function (p) {
           if (p) return fanApi('/feed/' + encodeURIComponent(p.id) + '/report', { method: 'POST', body: { reason: rw[1] || 'Reported in app' } });
         }).catch(function () {});
+      }
+    }
+
+    // ---- Teams portal (the crew's phone) goes to the real crew API ----
+    if (act === 'tsend') {
+      var tm = document.getElementById('tMsg');
+      var ttext = tm && tm.value.trim();
+      var tt = document.querySelector('#tBody .topbar-t');
+      var tch = CHAN_BY_NAME[tt ? tt.textContent.replace(/^#\s*/, '').trim() : 'all'] || 'all';
+      if (ttext) crewSend(tch, ttext).then(function () { toast('Sent on the real #' + tch + ' channel. Open Live, then Crew, to see replies.'); }).catch(function (err) { toast('Crew message failed: ' + err.message, true); });
+    }
+    if (act === 'tquick') crewIncident(b.getAttribute('data-v'));
+    if (act === 'tscan') doorMove(1);
+    if (act === 'tout') doorMove(-1);
+    if (act === 'tsim') {
+      var sim = b.getAttribute('data-v');
+      if (sim === 'fight') crewIncident('backup', 'Fight in the lobby');
+      else if (sim === 'task') crewApi('/crew/pings', { method: 'POST', body: { kind: 'task', title: 'Restock wristbands at the door', to: ['door'] } }).then(function () { toast('Real task ping sent to #door.'); }).catch(function () {});
+      else if (sim === 'set') crewApi('/crew/pings', { method: 'POST', body: { kind: 'info', title: 'Set change in 10', to: ['all'] } }).then(function () { toast('Real heads-up sent to all crew.'); }).catch(function () {});
+      else if (sim === 'cap') toast('The real capacity hold fires on its own when the live headcount hits 100%. Count people in under Live, then Crew.');
+    }
+
+    // ---- Owner Broadcast: sends for real when an owner is signed in ----
+    if (act === 'xpsend') {
+      if (!owner) { toast('Sign in as the owner under Live to send broadcasts for real.'); }
+      else {
+        var xt = document.getElementById('xpText');
+        var xtext = xt && xt.value.trim();
+        var PL = { fb: 'facebook', ig: 'instagram', x: 'x' };
+        var plats = Array.prototype.map.call(document.querySelectorAll('[data-act="xpp"][aria-pressed="true"]'), function (n) { return PL[n.getAttribute('data-v')]; }).filter(Boolean);
+        var xa = document.querySelector('[data-act="xpapp"]');
+        if (xa && xa.getAttribute('aria-pressed') === 'true') plats.push('app');
+        var xi = document.querySelector('[data-act="xpimg"]');
+        var withImg = xi && xi.getAttribute('aria-pressed') === 'true';
+        if (xtext && plats.length) {
+          (withImg ? fetch('og-image.jpg').then(function (r) { return r.blob(); }).then(fileToDataUrl) : Promise.resolve(null)).then(function (img) {
+            return ownerApi('/owner/broadcast', { method: 'POST', body: img ? { text: xtext, platforms: plats, image: img } : { text: xtext, platforms: plats } });
+          }).then(function (r) { toast('Broadcast: ' + r.summary); })
+            .catch(function (err) { toast('Broadcast failed: ' + err.message, true); });
+        }
       }
     }
 
