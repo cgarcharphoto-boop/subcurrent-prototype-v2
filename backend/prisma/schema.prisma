@@ -337,9 +337,21 @@ model CrewMessage {
   byDept    String?
   text      String
   alert     String? // urgent | task | break | capacity | info, for system lines
+  voiceMs   Int? // set on walkie transmissions; the audio is in VoiceClip
   createdAt DateTime @default(now())
+  voice     VoiceClip?
 
   @@index([channel, createdAt])
+}
+
+// Walkie audio, kept apart from CrewMessage so the chat poll stays light.
+model VoiceClip {
+  id        String      @id @default(cuid())
+  message   CrewMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId String      @unique
+  mime      String
+  data      String // base64; clips are capped at 30 seconds
+  createdAt DateTime    @default(now())
 }
 
 model CrewPing {

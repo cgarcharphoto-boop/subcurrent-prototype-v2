@@ -163,3 +163,26 @@ describe('ticket transfer', () => {
     expect(again.status).toBe(404);
   });
 });
+
+describe('walkie', () => {
+  const clip = Buffer.from('fake-opus-bytes-for-test').toString('base64');
+  it('stores a clip with its transcript, shows it on the channel, and serves the audio back', async () => {
+    const r = await crew(request(app).post('/crew/walkie')).send({ channel: 'door', mime: 'audio/webm;codecs=opus', audio: clip, ms: 2400, transcript: 'Two coming in from the lot' });
+    expect(r.status).toBe(201);
+    const st = await crew(request(app).get('/crew/state'));
+    const m = st.body.channels.door.find((x) => x.id === r.body.id);
+    expect(m).toMatchObject({ text: 'Two coming in from the lot', voiceMs: 2400, by: 'Jules' });
+    const a = await own(request(app).get(`/crew/walkie/${r.body.id}/audio`));
+    expect(a.status).toBe(200);
+    expect(a.headers['content-type']).toMatch(/^audio\/webm/);
+    expect(Buffer.from(a.body).toString()).toBe('fake-opus-bytes-for-test');
+  });
+
+  it('labels untranscribed clips and rejects bad input', async () => {
+    const r = await crew(request(app).post('/crew/walkie')).send({ channel: 'all', mime: 'audio/mp4', audio: clip, ms: 900 });
+    expect((await crew(request(app).get('/crew/state'))).body.channels.all.find((x) => x.id === r.body.id).text).toBe('Voice message');
+    expect((await crew(request(app).post('/crew/walkie')).send({ channel: 'all', mime: 'text/html', audio: clip, ms: 900 })).status).toBe(400);
+    expect((await crew(request(app).post('/crew/walkie')).send({ channel: 'all', mime: 'audio/webm', audio: clip, ms: 60_000 })).status).toBe(400);
+    expect((await request(app).get(`/crew/walkie/${r.body.id}/audio`)).status).toBe(401);
+  });
+});

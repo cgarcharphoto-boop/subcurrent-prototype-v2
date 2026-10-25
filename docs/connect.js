@@ -162,7 +162,8 @@
       '#sc-panel .sc-ping.done{opacity:.55}#sc-panel .sc-gauge{height:8px;margin-top:8px}#sc-panel .sc-gauge i{transition:width .4s}',
       '#sc-pill .n{background:#FF6B85;color:#fff;border-radius:999px;font:700 10px/1 -apple-system,system-ui,sans-serif;padding:3px 6px}',
       '#sc-toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);z-index:10000;background:#15101F;color:#EEE8FF;border:1px solid #4CC48D;border-radius:12px;padding:10px 14px;font:600 13px -apple-system,system-ui,sans-serif;opacity:0;pointer-events:none;transition:.25s;max-width:calc(100vw - 40px)}',
-      '#sc-toast.on{opacity:1;transform:translate(-50%,0)}#sc-toast.bad{border-color:#FF6B85}'
+      '#sc-toast.on{opacity:1;transform:translate(-50%,0)}#sc-toast.bad{border-color:#FF6B85}' +
+      '.sc-wk-play{background:none;border:0;padding:0;color:inherit;font:inherit;cursor:pointer}#sc-wk li.sc-wk-on .t-voice i{animation-play-state:running;opacity:1}#sc-wk li.sc-wk-on{outline:1px solid #4CC48D;border-radius:12px}'
     ].join('');
     document.head.appendChild(s);
   }
@@ -478,7 +479,7 @@
   var CREW_CHANNELS = [['all', 'All crew'], ['ops', 'Ops'], ['door', 'Door'], ['sec', 'Security'], ['bar', 'Bar'], ['prod', 'Production'], ['light', 'Lighting'], ['art', 'Artists']];
   var CHAN_BY_NAME = { 'All crew': 'all', all: 'all', Ops: 'ops', Door: 'door', Security: 'sec', Bar: 'bar', Production: 'prod', Lighting: 'light', Artists: 'art' };
   function demoCrew() {
-    return api('/crew/demo', { method: 'POST' }).then(function (d) {
+    return api('/crew/demo', { method: 'POST', body: { as: 'random' } }).then(function (d) {
       crew = { token: d.token, name: d.crew.name, dept: d.crew.dept, demo: true };
       save('crew', crew);
       return crew;
@@ -1691,6 +1692,193 @@
     }).catch(function () {});
   }
 
+  // ---------- Walkie: real push-to-talk on the Teams "Talk" screen ----------
+  // Hold the app's PTT button: the mic records and the browser transcribes on
+  // the device. Release: the clip goes to the channel. Clips from others on
+  // the same channel play on arrival, like a radio. We take the button's
+  // events in the capture phase so the app's simulated walkie never fires.
+  var wk = { on: false, rec: null, chunks: [], sr: null, text: '', interim: '', t0: 0, tick: null, stream: null, cancel: false };
+  var wkSince = new Date().toISOString(); // only clips after this auto-play
+  var wkUrls = {}, wkQueue = [], wkPlaying = false, wkPoll = null, wkList = [];
+  var WK_MAX_MS = 30000;
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  function wkLive() { return !!(health && health.integrations.crew && navigator.mediaDevices && window.MediaRecorder); }
+  function wkChannel() { var b = document.querySelector('[data-act="twk"][aria-pressed="true"]'); return (b && b.getAttribute('data-v')) || 'all'; }
+  function wkUi(tx, msg) {
+    var st = $('.wk-stage'), btn = $('#wkPtt'), el = $('#wkState');
+    if (st) st.classList.toggle('tx', tx);
+    if (btn) { btn.querySelector('span').textContent = tx ? 'TX' : 'HOLD'; btn.querySelector('small').textContent = tx ? 'Release to send' : 'to talk'; }
+    if (el && msg != null) el.textContent = msg;
+  }
+  function wkMime() {
+    var c = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm', 'audio/ogg;codecs=opus'];
+    for (var i = 0; i < c.length; i++) if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c[i])) return c[i];
+    return '';
+  }
+
+  function wkStart() {
+    if (wk.on) return;
+    wk.on = true; wk.cancel = false; wk.chunks = []; wk.text = ''; wk.interim = ''; wk.t0 = Date.now();
+    try { navigator.vibrate && navigator.vibrate(30); } catch (e) {}
+    wkUi(true, 'Opening mic…');
+    navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }).then(function (stream) {
+      if (!wk.on) { stream.getTracks().forEach(function (t) { t.stop(); }); return; } // released before the mic opened
+      wk.stream = stream;
+      var mime = wkMime();
+      wk.rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 24000 } : undefined);
+      wk.rec.ondataavailable = function (e) { if (e.data && e.data.size) wk.chunks.push(e.data); };
+      wk.rec.onstop = wkSend;
+      wk.rec.start(250);
+      wk.t0 = Date.now();
+      if (SR) {
+        try {
+          wk.sr = new SR(); wk.sr.lang = navigator.language || 'en-US'; wk.sr.continuous = true; wk.sr.interimResults = true;
+          wk.sr.onresult = function (e) {
+            var fin = '', mid = '';
+            for (var i = 0; i < e.results.length; i++) (e.results[i].isFinal ? (fin += e.results[i][0].transcript) : (mid += e.results[i][0].transcript));
+            wk.text = fin; wk.interim = mid;
+            var el = $('#wkState'); if (el && wk.on) el.textContent = '“' + (fin + mid).trim() + '”';
+          };
+          wk.sr.onerror = function () {};
+          wk.sr.start();
+        } catch (e) { wk.sr = null; }
+      }
+      var ch = wkChannel();
+      wk.tick = setInterval(function () {
+        var secs = Math.floor((Date.now() - wk.t0) / 1000);
+        if (!wk.sr || !(wk.text + wk.interim)) { var el = $('#wkState'); if (el) el.textContent = 'Transmitting to ' + (ch === 'all' ? 'all crew' : '#' + ch) + ' · 0:' + (secs < 10 ? '0' : '') + secs; }
+        if (Date.now() - wk.t0 >= WK_MAX_MS) wkStop();
+      }, 250);
+    }).catch(function (err) {
+      wk.on = false; wkUi(false, 'Channel clear.');
+      toast(err && err.name === 'NotAllowedError' ? 'Allow the microphone to use the walkie.' : 'Could not open the mic: ' + (err && err.message), true);
+    });
+  }
+
+  function wkStop() {
+    if (!wk.on) return;
+    wk.on = false;
+    clearInterval(wk.tick);
+    wkUi(false, 'Sending…');
+    if (wk.sr) { try { wk.sr.stop(); } catch (e) {} }
+    if (wk.rec && wk.rec.state !== 'inactive') wk.rec.stop(); else wkUi(false, 'Channel clear.');
+  }
+
+  function wkSend() {
+    var ms = Date.now() - wk.t0;
+    if (wk.stream) wk.stream.getTracks().forEach(function (t) { t.stop(); });
+    var ch = wkChannel(), mime = (wk.rec && wk.rec.mimeType) || 'audio/webm';
+    if (ms < 400 || !wk.chunks.length) { wkUi(false, 'Hold the button while you talk.'); return; }
+    var blob = new Blob(wk.chunks, { type: mime });
+    // Give the recognizer a beat to deliver its final words.
+    setTimeout(function () {
+      var transcript = (wk.text || wk.interim || '').trim();
+      var fr = new FileReader();
+      fr.onload = function () {
+        var b64 = String(fr.result).split(',')[1] || '';
+        crewApi('/crew/walkie', { method: 'POST', body: { channel: ch, mime: mime, audio: b64, ms: Math.min(ms, WK_MAX_MS), transcript: transcript || undefined } })
+          .then(function (r) {
+            wkUi(false, 'Sent to ' + (ch === 'all' ? 'all crew' : '#' + ch) + (transcript ? '' : '. No transcript on this browser.'));
+            wkUrls[r.id] = URL.createObjectURL(blob);
+            wkRefresh();
+          })
+          .catch(function (e) { wkUi(false, 'Not sent.'); toast('Walkie failed: ' + e.message, true); });
+      };
+      fr.readAsDataURL(blob);
+    }, SR ? 500 : 0);
+  }
+
+  function wkAudio(id) {
+    if (wkUrls[id]) return Promise.resolve(wkUrls[id]);
+    var tok = owner ? Promise.resolve(owner.token) : (crew ? Promise.resolve(crew.token) : demoCrew().then(function (c) { return c.token; }));
+    return tok.then(function (t) {
+      return fetch(API_BASE + '/crew/walkie/' + encodeURIComponent(id) + '/audio', { headers: { Authorization: 'Bearer ' + t } });
+    }).then(function (r) { if (!r.ok) throw new Error('Audio unavailable'); return r.blob(); })
+      .then(function (b) { return (wkUrls[id] = URL.createObjectURL(b)); });
+  }
+  function wkPlay(id) {
+    return wkAudio(id).then(function (u) {
+      return new Promise(function (done) {
+        var a = new Audio(u);
+        var li = document.querySelector('[data-wk="' + id + '"]'); if (li) li.classList.add('sc-wk-on');
+        var end = function () { if (li) li.classList.remove('sc-wk-on'); done(); };
+        a.onended = end; a.onerror = end;
+        a.play().catch(function () { end(); toast('Tap play on the walkie to hear new messages.'); });
+      });
+    });
+  }
+  function wkDrain() {
+    if (wkPlaying || !wkQueue.length) return;
+    wkPlaying = true;
+    wkPlay(wkQueue.shift()).catch(function () {}).then(function () { wkPlaying = false; wkDrain(); });
+  }
+
+  function wkRender() {
+    var box = $('#sc-wk'); if (!box) return;
+    var ch = wkChannel();
+    var rows = wkList.filter(function (m) { return m.ch === ch; }).slice(-6).reverse();
+    box.innerHTML = rows.length ? rows.map(function (m) {
+      var s = Math.max(1, Math.round(m.voiceMs / 1000));
+      return '<li data-wk="' + esc(m.id) + '" class="' + (m.mine ? 'me' : '') + '"><div><span class="small muted">' + esc(m.mine ? 'You' : m.by) + ' · ' + when(m.at) + '</span>' +
+        '<button class="t-voice sc-wk-play" data-wkplay="' + esc(m.id) + '" aria-label="Play"><i></i><i></i><i></i><i></i><i></i><i></i><b class="num">0:' + (s < 10 ? '0' : '') + s + '</b></button>' +
+        '<p class="t-tr">“' + esc(m.text) + '”</p></div></li>';
+    }).join('') : '<li class="muted small">No live voice on this channel yet. Hold the button and talk.</li>';
+  }
+
+  function wkRefresh() {
+    return crewApi('/crew/state').then(function (st) {
+      var list = [];
+      Object.keys(st.channels || {}).forEach(function (ch) {
+        (st.channels[ch] || []).forEach(function (m) { if (m.voiceMs) list.push({ id: m.id, ch: ch, by: m.by, text: m.text, voiceMs: m.voiceMs, at: m.at, mine: m.mine }); });
+      });
+      list.sort(function (a, b) { return new Date(a.at) - new Date(b.at); });
+      var ch = wkChannel();
+      list.forEach(function (m) {
+        if (!m.mine && m.at > wkSince && (m.ch === ch || m.ch === 'all') && wkQueue.indexOf(m.id) < 0) wkQueue.push(m.id);
+      });
+      if (list.length) wkSince = list[list.length - 1].at > wkSince ? list[list.length - 1].at : wkSince;
+      wkList = list;
+      wkRender();
+      wkDrain();
+    }).catch(function () {});
+  }
+
+  // Mount over the app's walkie screen whenever it renders.
+  function wkMount() {
+    var ptt = $('#wkPtt');
+    if (!ptt || !wkLive()) { if (!ptt && wkPoll) { clearInterval(wkPoll); wkPoll = null; } return; }
+    if (!$('#sc-wk')) {
+      var log = $('.wk-log');
+      if (log) { log.style.display = 'none'; log.insertAdjacentHTML('afterend', '<ul class="t-thread wk-log" id="sc-wk"></ul>'); }
+      var st = $('#wkState'); if (st && !wk.on) st.textContent = 'Live walkie. Hold to talk' + (SR ? '; your words are transcribed for loud rooms.' : '.');
+      wkRender();
+    }
+    if (!wkPoll) { wkRefresh(); wkPoll = setInterval(wkRefresh, 3000); }
+  }
+
+  ['pointerdown', 'touchstart', 'mousedown'].forEach(function (t) {
+    document.addEventListener(t, function (e) {
+      if (!e.target.closest || !e.target.closest('#wkPtt') || !wkLive()) return;
+      e.stopPropagation(); e.preventDefault();
+      if (t === 'pointerdown') wkStart();
+    }, { capture: true, passive: false });
+  });
+  ['pointerup', 'pointercancel', 'touchend', 'mouseup', 'pointerleave'].forEach(function (t) {
+    document.addEventListener(t, function (e) {
+      var onBtn = e.target.closest && e.target.closest('#wkPtt');
+      if (onBtn && wkLive()) e.stopPropagation();
+      if (wk.on && (t !== 'pointerleave' || onBtn)) wkStop();
+    }, true);
+  });
+  document.addEventListener('keydown', function (e) { if ((e.key === ' ' || e.key === 'Enter') && e.target.id === 'wkPtt' && wkLive()) { e.stopPropagation(); e.preventDefault(); if (!e.repeat) wkStart(); } }, true);
+  document.addEventListener('keyup', function (e) { if ((e.key === ' ' || e.key === 'Enter') && e.target.id === 'wkPtt' && wkLive()) { e.stopPropagation(); e.preventDefault(); wkStop(); } }, true);
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-wkplay]');
+    if (b) { e.stopPropagation(); wkPlay(b.getAttribute('data-wkplay')).catch(function (err) { toast(err.message, true); }); return; }
+    if (e.target.closest && e.target.closest('#wkPtt') && wkLive()) e.stopPropagation();
+  }, true);
+
   // ---------- boot ----------
   var ctrl = new AbortController();
   var timer = setTimeout(function () { ctrl.abort(); }, 6000);
@@ -1703,6 +1891,7 @@
       var syncQueued = false;
       new MutationObserver(function () {
         syncSheetInventory();
+        wkMount();
         if (syncQueued) return;
         syncQueued = true;
         requestAnimationFrame(function () { syncQueued = false; syncAppCounts(false); });

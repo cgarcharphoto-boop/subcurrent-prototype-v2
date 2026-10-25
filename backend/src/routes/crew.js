@@ -55,7 +55,14 @@ function crewToken(key, name, dept) {
 // ---- sign in ----
 // The prototype's Teams portal is "Jules, door lead". Same idea as the demo
 // fan: a fixed identity so the live demo exercises real crew auth.
+// With { as: 'random' } each demo phone gets its own crew member and key, so
+// two phones can actually talk to each other on the walkie.
+const DEMO_CREW = [['Jules', 'door'], ['Marco', 'sec'], ['Priya', 'prod'], ['Dee', 'bar'], ['Kai', 'light'], ['Rosa', 'ops'], ['Theo', 'door'], ['Nia', 'sec']];
 crewRouter.post('/demo', (req, res) => {
+  if (req.body?.as === 'random') {
+    const [name, dept] = DEMO_CREW[crypto.randomInt(DEMO_CREW.length)];
+    return res.json({ token: crewToken('demo-' + crypto.randomBytes(5).toString('hex'), name, dept), crew: { name, dept } });
+  }
   res.json({ token: crewToken('demo-jules', 'Jules', 'door'), crew: { name: 'Jules', dept: 'door' } });
 });
 
@@ -102,7 +109,7 @@ crewRouter.get(
     ]);
     const channels = Object.fromEntries(CHANNELS.map((c) => [c, []]));
     for (const m of messages.reverse()) {
-      (channels[m.channel] || channels.all).push({ id: m.id, by: m.byName, dept: m.byDept, text: m.text, alert: m.alert, at: m.createdAt, mine: m.byKey === req.crew.key });
+      (channels[m.channel] || channels.all).push({ id: m.id, by: m.byName, dept: m.byDept, text: m.text, alert: m.alert, voiceMs: m.voiceMs, at: m.createdAt, mine: m.byKey === req.crew.key });
     }
     res.json({
       me: req.crew,
@@ -129,6 +136,46 @@ crewRouter.post(
       data: { channel: body.channel, text: body.text, byKey: req.crew.key, byName: req.crew.name, byDept: req.crew.dept },
     });
     res.status(201).json({ id: m.id, at: m.createdAt });
+  })
+);
+
+// ---- walkie: push-to-talk clips with an on-device transcript ----
+const AUDIO_TYPES = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/aac', 'audio/wav'];
+const walkieSchema = z.object({
+  channel: z.enum(CHANNELS),
+  mime: z.string().max(60).refine((m) => AUDIO_TYPES.includes(m.split(';')[0].trim()), 'Unsupported audio type'),
+  audio: z.string().min(16).max(700_000).regex(/^[A-Za-z0-9+/=]+$/, 'Audio must be base64'),
+  ms: z.number().int().min(300).max(30_000),
+  transcript: z.string().trim().max(500).optional(),
+});
+
+crewRouter.post(
+  '/walkie',
+  requireCrew,
+  writeLimit,
+  asyncRoute(async (req, res) => {
+    const body = walkieSchema.parse(req.body);
+    const ev = await currentEvent();
+    const m = await prisma.crewMessage.create({
+      data: {
+        eventSlug: ev?.slug, channel: body.channel, byKey: req.crew.key, byName: req.crew.name, byDept: req.crew.dept,
+        text: body.transcript || 'Voice message', voiceMs: body.ms,
+        voice: { create: { mime: body.mime, data: body.audio } },
+      },
+    });
+    res.status(201).json({ id: m.id, at: m.createdAt });
+  })
+);
+
+crewRouter.get(
+  '/walkie/:id/audio',
+  requireCrew,
+  asyncRoute(async (req, res) => {
+    const clip = await prisma.voiceClip.findUnique({ where: { messageId: req.params.id } });
+    if (!clip) throw httpError(404, 'No audio for that message');
+    res.set('Content-Type', clip.mime.split(';')[0]);
+    res.set('Cache-Control', 'private, max-age=86400');
+    res.send(Buffer.from(clip.data, 'base64'));
   })
 );
 
