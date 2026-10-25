@@ -107,25 +107,16 @@ async function run(browser, name, url, { deep }) {
     log(false, `[${name}] tap Play loads SoundCloud iframe`, 'no .sc-load button found on load');
   }
 
-  // Multipass rail — confirm flyers actually render (real S3 images, not just DOM nodes)
-  const railImgs = page.locator('.rail .mp-card img');
-  const railCount = await railImgs.count();
-  let loadedCount = 0;
-  for (let i = 0; i < railCount; i++) {
-    const nw = await railImgs.nth(i).evaluate((img) => img.naturalWidth).catch(() => 0);
-    if (nw > 0) loadedCount++;
-  }
-  log(railCount > 0 && loadedCount > 0, `[${name}] Multipass rail flyers load`, `${loadedCount}/${railCount} images rendered`);
-
-  const flyerSrcs = await railImgs.evaluateAll((imgs) => imgs.map((i) => i.src));
-  let s3Ok = 0;
-  for (const src of flyerSrcs.slice(0, 5)) {
+  // Coverflow rail of nights: every flyer's background image must actually load.
+  const flyerUrls = await page.locator('.cf .cf-img').evaluateAll((els) =>
+    els.map((el) => (getComputedStyle(el).backgroundImage.match(/url\(["']?([^"')]+)["']?\)/) || [])[1]).filter(Boolean));
+  let flyersOk = 0;
+  for (const src of flyerUrls) {
     try {
-      const r = await context.request.get(src);
-      if (r.ok()) s3Ok++;
+      if (src.startsWith('data:') || (await context.request.get(new URL(src, url).toString())).ok()) flyersOk++;
     } catch {}
   }
-  log(s3Ok === Math.min(5, flyerSrcs.length) && flyerSrcs.length > 0, `[${name}] Multipass flyer S3 URLs return 200`, `${s3Ok}/${Math.min(5, flyerSrcs.length)} checked OK`);
+  log(flyerUrls.length > 0 && flyersOk === flyerUrls.length, `[${name}] coverflow flyers load`, `${flyersOk}/${flyerUrls.length} images OK`);
 
   // Owner portal switch
   await page.locator('button[data-act="mode"][data-v="owner"]').click();
