@@ -18,37 +18,41 @@ If a field truly cannot be read, use an empty string (or null for venueGuess). D
 venue address — venues are never printed on these flyers and must come from the owner's saved
 list, not the image.`;
 
+// What the owner sees when no AI is available, so the flow still demos end to end.
+const SAMPLE = {
+  title: 'Undertow Afters',
+  date: 'Saturday, November 15',
+  doors: '2:00 AM',
+  ageLimit: '21+',
+  genres: 'Psybass, glitch, downtempo',
+  venueGuess: null,
+  lineup: ['Secret guests'],
+};
+
 // imageBase64 should be a data URL body (no "data:image/...;base64," prefix) plus its media type.
 export async function readFlyer({ imageBase64, mediaType = 'image/jpeg' }) {
-  if (!flyerAiLive) {
-    return {
-      ok: true,
-      mock: true,
-      fields: {
-        title: 'Undertow Afters',
-        date: 'Saturday, November 15',
-        doors: '2:00 AM',
-        ageLimit: '21+',
-        genres: 'Psybass, glitch, downtempo',
-        venueGuess: null,
-        lineup: ['Secret guests'],
-      },
-    };
-  }
+  if (!flyerAiLive) return { ok: true, mock: true, fields: SAMPLE };
   const anthropic = await getClient();
-  const msg = await anthropic.messages.create({
-    model: env.anthropicModel,
-    max_tokens: 500,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
-          { type: 'text', text: SCHEMA_PROMPT },
-        ],
-      },
-    ],
-  });
+  let msg;
+  try {
+    msg = await anthropic.messages.create({
+      model: env.anthropicModel,
+      max_tokens: 500,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
+            { type: 'text', text: SCHEMA_PROMPT },
+          ],
+        },
+      ],
+    });
+  } catch (err) {
+    // A rejected key or an outage shouldn't break the owner's flow: hand back the sample, flagged.
+    console.warn('flyer AI unavailable:', err.status || '', err.message);
+    return { ok: true, mock: true, fallback: 'ai_unavailable', fields: SAMPLE };
+  }
   const text = msg.content.find((b) => b.type === 'text')?.text || '{}';
   let fields;
   try {
